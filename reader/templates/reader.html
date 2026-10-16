@@ -25,6 +25,7 @@
         <button class="btn btn-sm btn-ghost" onclick="changeFontSize(-1)" title="Smaller text">A&#8722;</button>
         <button class="btn btn-sm btn-ghost" onclick="changeFontSize(1)" title="Larger text">A+</button>
         <button class="btn btn-sm btn-ghost" id="theme-cycle-btn" onclick="cycleTheme()" title="Cycle theme (T)">&#9675;</button>
+        <button class="btn btn-sm btn-ghost" id="voices-btn" onclick="toggleVoices()" title="Show who reads each line (V)">&#9834;</button>
         <button class="btn btn-sm btn-ghost" id="bookmark-btn" onclick="addBookmark()" title="Add bookmark (B)">&#9734;</button>
         <button class="btn btn-sm btn-ghost" id="bm-panel-toggle" onclick="toggleBookmarkPanel()" title="Bookmarks">&#9776;</button>
         <button class="btn btn-sm btn-ghost" id="shortcuts-btn" onclick="showShortcuts()" title="Keyboard shortcuts (?)">?</button>
@@ -35,6 +36,7 @@
       <div class="chapter-progress-fill" id="chapter-progress-fill" style="width:0%"></div>
     </div>
 
+    <div id="voice-legend" class="voice-legend" hidden></div>
     <div id="chapter-content" class="chapter-content">
       <div class="placeholder-text">Select a chapter from the sidebar to begin reading.</div>
     </div>
@@ -108,6 +110,7 @@
     <div class="shortcut-row"><span class="shortcut-key">&#8594;</span><span class="shortcut-desc">Next segment</span></div>
     <div class="shortcut-row"><span class="shortcut-key">B</span><span class="shortcut-desc">Add bookmark</span></div>
     <div class="shortcut-row"><span class="shortcut-key">T</span><span class="shortcut-desc">Cycle theme</span></div>
+    <div class="shortcut-row"><span class="shortcut-key">V</span><span class="shortcut-desc">Show voices</span></div>
     <div class="shortcut-row"><span class="shortcut-key">C</span><span class="shortcut-desc">Toggle contents</span></div>
     <div class="shortcut-row"><span class="shortcut-key">M</span><span class="shortcut-desc">Toggle bookmarks</span></div>
     <div class="shortcut-row"><span class="shortcut-key">?</span><span class="shortcut-desc">Show this panel</span></div>

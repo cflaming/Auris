@@ -11,6 +11,8 @@ let fontSize        = parseInt(localStorage.getItem('fontSize') || '18');
 let fontFamily      = localStorage.getItem('fontFamily') || 'serif';
 let lineHeight      = parseFloat(localStorage.getItem('lineHeight') || '1.9');
 let currentTheme    = localStorage.getItem('theme') || 'night';
+let showVoices      = localStorage.getItem('showVoices') !== '0';
+let charColors      = {};   // character name -> #RRGGBB
 let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
@@ -227,7 +229,12 @@ async function openChapter(chapterId, options = {}) {
   const estEl = document.getElementById('reading-estimate');
   if (estEl) estEl.textContent = minutes > 0 ? `~${minutes} min read` : '';
 
-  segments = await fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json());
+  const [segs, chars] = await Promise.all([
+    fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
+    fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
+  ]);
+  segments = segs;
+  charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
   renderContent(segments);
   _prewarmChapter();
 
@@ -269,18 +276,51 @@ function renderContent(segs) {
     }).join('');
 
 
-    const charAttr = seg.character_name ? ` data-char="${esc(seg.character_name)}"` : '';
+    const name = seg.character_name;
+    const color = name && charColors[name];
+    const charAttr = name
+      ? ` data-char="${esc(name)}"` + (color ? ` style="--char-color:${esc(color)}"` : '')
+      : '';
     const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '');
-    return `<span class="${cls}" data-idx="${i}"${charAttr} onclick="jumpTo(${i})">${wordSpans}</span> `;
+    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(name || 'Narrator')}" onclick="jumpTo(${i})">${wordSpans}</span> `;
   };
 
   const html = paras.map(p => `<p>${p.items.map(([seg, i]) => renderSeg(seg, i)).join('')}</p>`).join('');
   container.innerHTML = `<div>${html}</div>`;
+  renderVoiceLegend(segs);
+  applyShowVoices();
 
   // Restore font prefs (font may be reset by innerHTML)
   container.style.fontSize   = fontSize + 'px';
   container.style.lineHeight = lineHeight;
   container.style.fontFamily = FONT_FAMILIES[fontFamily] || FONT_FAMILIES.serif;
+}
+
+function renderVoiceLegend(segs) {
+  const legend = document.getElementById('voice-legend');
+  const counts = new Map();
+  segs.forEach(s => {
+    const key = s.character_name || '';
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const names = [...counts.keys()].filter(Boolean).sort((a, b) => counts.get(b) - counts.get(a));
+  const chip = (label, color, n) =>
+    `<span class="voice-chip"><span class="voice-swatch"${color ? ` style="--char-color:${esc(color)}"` : ''}></span>${esc(label)} <span class="voice-count">${n}</span></span>`;
+  legend.innerHTML = chip('Narrator', '', counts.get('') || 0) +
+    names.map(n => chip(n, charColors[n], counts.get(n))).join('');
+}
+
+function applyShowVoices() {
+  document.getElementById('chapter-content').classList.toggle('show-voices', showVoices);
+  document.getElementById('voice-legend').hidden = !showVoices;
+  document.getElementById('voices-btn').classList.toggle('active', showVoices);
+}
+
+function toggleVoices() {
+  showVoices = !showVoices;
+  localStorage.setItem('showVoices', showVoices ? '1' : '0');
+  applyShowVoices();
+  showToast(showVoices ? 'Voices shown' : 'Voices hidden');
 }
 
 function jumpTo(idx) {
@@ -799,6 +839,9 @@ document.addEventListener('keydown', e => {
     case 't': case 'T':
       cycleTheme();
       break;
+    case 'v': case 'V':
+      toggleVoices();
+      break;
     case 'c': case 'C':
       document.getElementById('toc-toggle').click();
       break;
@@ -832,7 +875,7 @@ function showToast(msg, type = 'ok') {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function esc(s) {
-  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
