@@ -63,7 +63,7 @@ Or directly:
 python reader/setup.py
 ```
 
-The installer detects CUDA or CPU, creates `reader/.venv`, installs PyTorch, OmniVoice, spaCy, and the reader dependencies, then downloads the `en_core_web_sm` spaCy model when network access is available.
+The installer detects CUDA, Apple Silicon, or CPU, creates `reader/.venv`, installs PyTorch, OmniVoice, spaCy, and the reader dependencies, then downloads the `en_core_web_sm` spaCy model when network access is available.
 
 ## Model setup
 

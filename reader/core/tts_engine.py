@@ -19,6 +19,9 @@ import soundfile as sf
 
 log = logging.getLogger(__name__)
 
+# Let ops without an Apple GPU (MPS) kernel run on CPU instead of raising.
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
+
 AUDIO_CACHE_DIR = str(Path(__file__).resolve().parent.parent / "audio_cache")
 VOICE_REF_DIR = os.path.join(AUDIO_CACHE_DIR, "voice_refs")
 SAMPLE_RATE = 24_000
@@ -195,8 +198,8 @@ class TTSEngine:
             import torch
             from omnivoice import OmniVoice
 
-            device = "cuda" if self._cuda_available() else "cpu"
-            dtype = torch.float16 if device == "cuda" else torch.float32
+            device = self._pick_device()
+            dtype = torch.float32 if device == "cpu" else torch.float16
             log.info("Loading OmniVoice from %s on %s ...", self.model_path, device)
             self.model = OmniVoice.from_pretrained(
                 self.model_path,
@@ -246,13 +249,17 @@ class TTSEngine:
             self._downloading = False
 
     @staticmethod
-    def _cuda_available() -> bool:
+    def _pick_device() -> str:
         try:
             import torch
 
-            return torch.cuda.is_available()
+            if torch.cuda.is_available():
+                return "cuda"
+            if torch.backends.mps.is_available():
+                return "mps"
         except ImportError:
-            return False
+            pass
+        return "cpu"
 
     @staticmethod
     def cache_key(
