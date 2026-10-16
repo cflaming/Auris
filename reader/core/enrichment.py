@@ -133,19 +133,6 @@ _ATTRIBUTION_SENTENCE_RE = re.compile(
     re.IGNORECASE,
 )
 
-_DIALOGUE_RE = re.compile(
-    rf"(?:"
-    rf"{_QUOTE_CLASS}(?P<text1>[^{_QUOTE_CONTENT_CLASS}]{{2,}}){_QUOTE_CLASS}\s*[,.]?\s*"
-    rf"(?P<name1>{_NAME_PATTERN})\s+"
-    rf"(?:{_ATTRIBUTION_VERBS})"
-    rf"|"
-    rf"(?P<name2>{_NAME_PATTERN})\s+"
-    rf"(?:{_ATTRIBUTION_VERBS})\s*[,.]?\s*"
-    rf"{_QUOTE_CLASS}(?P<text2>[^{_QUOTE_CONTENT_CLASS}]{{2,}}){_QUOTE_CLASS}"
-    rf")",
-    re.DOTALL,
-)
-
 _STANDALONE_QUOTE_RE = re.compile(rf'{_QUOTE_CLASS}([^"\u201c\u201d]{{2,}}){_QUOTE_CLASS}')
 
 _ACTION_WORDS = re.compile(
@@ -309,59 +296,342 @@ def _should_merge_sentences(buffer: str, sentence: str) -> bool:
     return not _has_dialogue(buffer) and not _has_dialogue(sentence) and combined_words <= 22
 
 
-def _split_paragraph_segments(text: str, chapter_title: str | None = None) -> list[list[str]]:
-    """Split text into paragraphs, each a list of TTS segments. Segments never
-    span paragraphs, so the reader can rebuild the original paragraph breaks."""
-    result: list[list[str]] = []
-
-    for paragraph in _split_paragraphs(text, chapter_title):
-        sentences = _split_paragraph_sentences(paragraph)
-        if not sentences:
-            continue
-
-        segments: list[str] = []
-        buffer = ""
-        for sentence in sentences:
-            if not buffer:
-                buffer = sentence
-            elif _should_merge_sentences(buffer, sentence):
-                buffer = f"{buffer} {sentence}".strip()
-            else:
-                segments.append(buffer)
-                buffer = sentence
-        if buffer:
+def _segment_text(text: str) -> list[str]:
+    """Split a run of text into sentences, merging short neighbours into
+    TTS-sized segments."""
+    segments: list[str] = []
+    buffer = ""
+    for sentence in _split_paragraph_sentences(text):
+        if not buffer:
+            buffer = sentence
+        elif _should_merge_sentences(buffer, sentence):
+            buffer = f"{buffer} {sentence}".strip()
+        else:
             segments.append(buffer)
-        result.append(segments)
-
-    return result
-
-
-def _build_dialogue_map(text: str) -> dict[str, str]:
-    """Map dialogue snippets to detected speaker names."""
-    mapping = {}
-    for match in _DIALOGUE_RE.finditer(text):
-        dialogue = match.group("text1") or match.group("text2") or ""
-        speaker = match.group("name1") or match.group("name2") or ""
-        if dialogue and speaker:
-            mapping[dialogue.strip()[:60]] = speaker.strip()
-    return mapping
+            buffer = sentence
+    if buffer:
+        segments.append(buffer)
+    return segments
 
 
-def _find_speaker(sentence: str, dialogue_map: dict, last_speaker: str | None) -> str | None:
-    if not sentence:
+# ── Dialogue spans and speaker attribution ───────────────────────────────────
+#
+# Each paragraph is split into quoted and narration spans. Quoted spans are
+# voiced by the paragraph's speaker (fiction convention: one speaker per
+# paragraph); narration, including attributions like "she said", goes to the
+# narrator. The speaker comes from the strongest clue available: an explicit
+# speech verb next to a quote, an action beat next to it, a continued quote,
+# or turn-taking in a two-person exchange.
+
+_SPEECH_VERB_RE = re.compile(
+    r"\b(?:"
+    r"sa(?:id|ys|ying)|ask(?:ed|s|ing)|repl(?:ied|ies|ying)|answer(?:ed|s|ing)|"
+    r"respond(?:ed|s|ing)|whisper(?:ed|s|ing)|shout(?:ed|s|ing)|yell(?:ed|s|ing)|"
+    r"call(?:ed|s|ing)|cr(?:ied|ies|ying)|mutter(?:ed|s|ing)|mumbl(?:ed|es|ing)|"
+    r"murmur(?:ed|s|ing)|exclaim(?:ed|s|ing)|add(?:ed|s|ing)|continu(?:ed|es|ing)|"
+    r"laugh(?:ed|s|ing)|chuckl(?:ed|es|ing)|giggl(?:ed|es|ing)|sigh(?:ed|s|ing)|"
+    r"groan(?:ed|s|ing)|snap(?:ped|s|ping)|retort(?:ed|s|ing)|insist(?:ed|s|ing)|"
+    r"demand(?:ed|s|ing)|plead(?:ed|s|ing)|beg(?:ged|s|ging)|not(?:ed|es|ing)|"
+    r"observ(?:ed|es|ing)|remark(?:ed|s|ing)|growl(?:ed|s|ing)|gasp(?:ed|s|ing)|"
+    r"stammer(?:ed|s|ing)|stutter(?:ed|s|ing)|shriek(?:ed|s|ing)|scream(?:ed|s|ing)|"
+    r"breath(?:ed|es|ing)|hiss(?:ed|es|ing)|bark(?:ed|s|ing)|snort(?:ed|s|ing)|"
+    r"scoff(?:ed|s|ing)|huff(?:ed|s|ing)|grumbl(?:ed|es|ing)|grunt(?:ed|s|ing)|"
+    r"teas(?:ed|es|ing)|jok(?:ed|es|ing)|interrupt(?:ed|s|ing)|protest(?:ed|s|ing)|"
+    r"correct(?:ed|s|ing)|suggest(?:ed|s|ing)|offer(?:ed|s|ing)|admit(?:ted|s|ting)|"
+    r"agree(?:d|s|ing)|explain(?:ed|s|ing)|announc(?:ed|es|ing)|declar(?:ed|es|ing)|"
+    r"warn(?:ed|s|ing)|promis(?:ed|es|ing)|conced(?:ed|es|ing)|counter(?:ed|s|ing)|"
+    r"chim(?:ed|es|ing)|pip(?:ed|es|ing) up|spoke|speaks|speaking|told|tells|telling|"
+    r"quip(?:ped|s|ping)|drawl(?:ed|s|ing)|purr(?:ed|s|ing)|sniff(?:ed|s|ing)|"
+    r"sob(?:bed|s|bing)|wonder(?:ed|s|ing)|mus(?:ed|es|ing)|prompt(?:ed|s|ing)|"
+    r"confirm(?:ed|s|ing)|greet(?:ed|s|ing)|inquir(?:ed|es|ing)|enquir(?:ed|es|ing)|"
+    r"question(?:ed|s|ing)|stat(?:ed|es|ing)|order(?:ed|s|ing)|command(?:ed|s|ing)"
+    r")\b",
+    re.IGNORECASE,
+)
+_SUBJECT_PRONOUN_RE = re.compile(r"\b(?:(?P<he>[Hh]e)|(?P<she>[Ss]he)|(?P<i>I))\b(?!['’])")
+_TITLE_WORDS = {
+    "mr", "mrs", "ms", "miss", "mister", "missus", "dr", "doctor", "lady", "lord",
+    "sir", "madam", "captain", "professor", "aunt", "uncle",
+}
+# Optional title directly before a name, e.g. "Mister Hebert".
+_TITLE_PREFIX_RE = re.compile(
+    r"(?:\b(?:" + "|".join(sorted(_TITLE_WORDS, key=len, reverse=True)) + r")\.?\s+)?$",
+    re.IGNORECASE,
+)
+# Capitalised words that start clauses but are not names.
+_NOT_NAMES = {
+    "The", "A", "An", "But", "And", "Then", "So", "Still", "Yet", "Now", "Well",
+    "This", "That", "It", "They", "We", "You", "Everyone", "Someone", "Nobody",
+}
+# A clause opening with an unnamed noun phrase: "The man stood up, saying".
+_UNNAMED_SUBJECT_RE = re.compile(r"^\s*(?:The|A|An|One of)\b")
+_CLAUSE_SPLIT_RE = re.compile(r"(?<=[.!?;])\s+")
+# Coordinating joins start a clause with its own subject ("..., but Carol was");
+# subordinate ones (when/while/as) do not name who speaks.
+_CLAUSE_JOIN_RE = re.compile(r"(?:,|\b(?:but|and|so|yet))\s*$", re.IGNORECASE)
+_SCENE_BREAK_RE = re.compile(r"^\s*(?:[-*#~=_]\s*){3,}")
+# Consecutive quote-free paragraphs after which an exchange is over.
+_CONVERSATION_GAP = 3
+# How many paragraphs back "he"/"she" may refer to a named character.
+_PRONOUN_WINDOW = 8
+
+
+def _split_quote_spans(paragraph: str) -> tuple[list[tuple[bool, str]], bool]:
+    """Split a paragraph into (is_quote, text) spans, quote marks included in
+    the quoted spans. Straight quotes toggle; curly quotes open and close.
+    Also returns whether the paragraph ends inside an open quote, which in
+    fiction means the same speaker continues in the next paragraph."""
+    spans: list[tuple[bool, str]] = []
+    buf: list[str] = []
+    inside = False
+    carry = ""
+
+    def flush(is_quote: bool):
+        nonlocal carry
+        text = (carry + "".join(buf)).strip()
+        buf.clear()
+        carry = ""
+        if not text:
+            return
+        if not re.search(r"[A-Za-z0-9]", text):
+            # Bare punctuation between quotes: keep it with its neighbour.
+            if spans:
+                prev_quote, prev_text = spans[-1]
+                spans[-1] = (prev_quote, f"{prev_text}{text}" if text[0] in ",.;:!?" else f"{prev_text} {text}")
+            else:
+                carry = text + " "
+            return
+        spans.append((is_quote, text))
+
+    for ch in paragraph:
+        if ch == "“" or (ch == '"' and not inside):
+            if not inside:
+                flush(False)
+                inside = True
+            buf.append(ch)
+        elif ch == "”" or (ch == '"' and inside):
+            buf.append(ch)
+            if inside:
+                flush(True)
+                inside = False
+        else:
+            buf.append(ch)
+    ended_open = inside and bool("".join(buf).strip())
+    flush(inside)
+    return spans, ended_open
+
+
+def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str]]:
+    """Regex over character names (plus title-less aliases such as "Militia"
+    for "Miss Militia") and the alias -> canonical name map."""
+    aliases = {name: name for name in character_map}
+    candidates: dict[str, set[str]] = {}
+    for name in character_map:
+        words = name.split()
+        if len(words) > 1 and words[0].lower().rstrip(".") in _TITLE_WORDS:
+            candidates.setdefault(" ".join(words[1:]), set()).add(name)
+    for alias, names in candidates.items():
+        if len(names) == 1 and alias not in aliases:
+            aliases[alias] = next(iter(names))
+    if not aliases:
+        return None, {}
+    alternation = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
+    # Skip possessives: "Taylor's father said" is not Taylor speaking.
+    return re.compile(rf"\b(?:{alternation})\b(?!['’]s\b)"), aliases
+
+
+def _subjects(clause: str, names_re, aliases) -> list[tuple[int, str, str]]:
+    """(position, kind, value) for names and subject pronouns in a clause.
+    kind is "name" (value = canonical name), "pronoun" (value = gender) or
+    "first_person"."""
+    found = []
+    if names_re:
+        for m in names_re.finditer(clause):
+            found.append((m.start(), "name", aliases[m.group(0)]))
+    for m in _SUBJECT_PRONOUN_RE.finditer(clause):
+        if m.group("i"):
+            found.append((m.start(), "first_person", ""))
+        else:
+            found.append((m.start(), "pronoun", "male" if m.group("he") else "female"))
+    return sorted(found)
+
+
+def _at_clause_start(clause: str, pos: int) -> bool:
+    """True when the word at pos starts a (sub)clause, i.e. is likely its
+    subject: at the start, after an intro phrase ("Cutting through the
+    pleasantries, Carol"), or after a conjunction ("..., but Carol")."""
+    before = _TITLE_PREFIX_RE.sub("", clause[:pos])
+    return not before.strip() or bool(_CLAUSE_JOIN_RE.search(before))
+
+
+def _clause_clue(clause: str, names_re, aliases, explicit_only: bool, last_subject: bool = False):
+    """Return (kind, value) naming who speaks according to one narration
+    clause, or None. kind: name, pronoun, first_person or unknown (value is
+    the untracked name, or "" when the verb has no recognisable subject).
+    For beats, last_subject picks the clause's last subject ("Amy wished...,
+    but Carol was...") instead of its first."""
+    verb = _SPEECH_VERB_RE.search(clause)
+    subjects = _subjects(clause, names_re, aliases)
+    if verb:
+        before = [s for s in subjects if s[0] < verb.start()]
+        leading = [s for s in before if _at_clause_start(clause, s[0])]
+        if leading:
+            return leading[0][1:]
+        if _UNNAMED_SUBJECT_RE.match(clause):
+            return ("unknown", "")
+        if before:
+            return before[0][1:]
+        after = [s for s in subjects if 0 <= s[0] - verb.end() <= 2]
+        if after:                                   # inverted: said Carol
+            return after[0][1:]
+        word = re.search(r"\b([A-Z][a-z]+)\s+$", clause[:verb.start()])
+        if word and word.group(1) not in _NOT_NAMES:
+            return ("unknown", word.group(1))       # a name we don't track
+        return ("unknown", "")
+    if explicit_only:
         return None
+    beats = [(kind, value) for pos, kind, value in subjects if _at_clause_start(clause, pos)]
+    if not beats:
+        return None
+    return beats[-1] if last_subject else beats[0]
 
-    inner = _STANDALONE_QUOTE_RE.search(sentence)
-    if inner:
-        snippet = inner.group(1).strip()[:60]
-        for key, name in dialogue_map.items():
-            if key in snippet or snippet in key:
-                return name
-        # No explicit attribution nearby — assume the conversation is still
-        # with the same speaker rather than falling back to the narrator.
-        return last_speaker
 
+def _adjacent_clauses(spans, idx: int) -> list[tuple[str, str]]:
+    """Narration clauses touching quote span idx: ("after", first clause of
+    the following narration), then ("before", last clause of the preceding)."""
+    out = []
+    if idx + 1 < len(spans) and not spans[idx + 1][0]:
+        out.append(("after", _CLAUSE_SPLIT_RE.split(spans[idx + 1][1])[0]))
+    if idx > 0 and not spans[idx - 1][0]:
+        out.append(("before", _CLAUSE_SPLIT_RE.split(spans[idx - 1][1])[-1]))
+    return out
+
+
+def _paragraph_clue(spans, names_re, aliases):
+    quote_idx = [i for i, (is_quote, _) in enumerate(spans) if is_quote]
+    if not quote_idx:
+        return None
+    for i in quote_idx:
+        for _, clause in _adjacent_clauses(spans, i):
+            clue = _clause_clue(clause, names_re, aliases, explicit_only=True)
+            if clue:
+                return clue
+    # Beats around the first quote: the last two sentences leading into it,
+    # nearest first, then the sentence right after it.
+    first = quote_idx[0]
+    beat_clauses = []
+    if first > 0 and not spans[first - 1][0]:
+        beat_clauses += [(c, True) for c in reversed(_CLAUSE_SPLIT_RE.split(spans[first - 1][1])[-2:])]
+    if first + 1 < len(spans) and not spans[first + 1][0]:
+        beat_clauses.append((_CLAUSE_SPLIT_RE.split(spans[first + 1][1])[0], False))
+    for clause, leading in beat_clauses:
+        clue = _clause_clue(clause, names_re, aliases, explicit_only=False, last_subject=leading)
+        if clue:
+            return clue
     return None
+
+
+def _addressed(spans, names_re, aliases) -> str | None:
+    """A character addressed by name in the paragraph's speech ("..., Taylor?"
+    or "Amy, ..."), who is likely to answer next."""
+    if not names_re:
+        return None
+    found = None
+    for is_quote, text in spans:
+        if not is_quote:
+            continue
+        for m in names_re.finditer(text):
+            before = text[:m.start()].rstrip()
+            after = text[m.end():m.end() + 1]
+            if (before.endswith(",") or before.endswith(("\"", "\u201c"))) and after in (",", "?", "!", "."):
+                found = aliases[m.group(0)]
+    return found
+
+
+def _gender_ok(name: str, gender: str, character_map: dict) -> bool:
+    known = (character_map.get(name) or {}).get("gender") or "unknown"
+    return known not in ("male", "female") or known == gender
+
+
+def _attribute_paragraphs(paragraph_spans: list, character_map: dict) -> list[str | None]:
+    """Return the speaker (a character_map name, or None for the narrator)
+    for the quoted spans of each paragraph."""
+    names_re, aliases = _name_matcher(character_map)
+    speakers: list[str | None] = []
+    turns: list[str] = []          # speaker keys of the current exchange
+    mentions: list[tuple[int, str]] = []  # (paragraph, name) in narration, oldest first
+    quiet = 0                      # consecutive paragraphs without quotes
+    continued_from: str | None = None
+    addressed: str | None = None   # named in the previous speech
+
+    for para_no, (spans, ended_open) in enumerate(paragraph_spans):
+        has_quote = any(is_quote for is_quote, _ in spans)
+        narration = " ".join(text for is_quote, text in spans if not is_quote)
+        if _SCENE_BREAK_RE.match(spans[0][1]):
+            turns.clear()
+            addressed = None
+        local = [aliases[m.group(0)] for m in names_re.finditer(narration)] if names_re else []
+
+        if not has_quote:
+            speakers.append(None)
+            quiet += 1
+            if quiet >= _CONVERSATION_GAP:
+                turns.clear()
+                addressed = None
+            mentions.extend((para_no, name) for name in local)
+            continued_from = None
+            continue
+        quiet = 0
+
+        last = turns[-1] if turns else None
+        alt = turns[-2] if len(turns) >= 2 and turns[-2] != last and turns[-2] in character_map else None
+        if addressed and addressed != last:
+            alt = addressed            # "..., Taylor?" -> Taylor answers
+        clue = _paragraph_clue(spans, names_re, aliases)
+        if clue == ("unknown", ""):
+            clue = None                # "the teen replied": someone, but who
+        key = "?"
+        speaker = None
+
+        if clue is None and continued_from is not None:
+            speaker, key = (continued_from if continued_from in character_map else None), continued_from
+        elif clue is None:
+            speaker = alt
+            key = alt or "?"
+        elif clue[0] == "name":
+            speaker = key = clue[1]
+        elif clue[0] == "first_person":
+            key = "I"
+        elif clue[0] == "unknown":
+            key = f"?{clue[1]}"
+        elif clue[0] == "pronoun":
+            gender = clue[1]
+            if alt and _gender_ok(alt, gender, character_map):
+                speaker = alt
+            else:
+                recent = [n for p_no, n in mentions if para_no - p_no <= _PRONOUN_WINDOW]
+                for name in reversed(recent + local):
+                    if name != last and _gender_ok(name, gender, character_map):
+                        speaker = name
+                        break
+            key = speaker or f"?{gender}"
+
+        speakers.append(speaker)
+        if not (continued_from is not None and clue is None):
+            turns.append(key)
+        mentions.extend((para_no, name) for name in local)
+        del mentions[:-30]
+        continued_from = key if ended_open else None
+        addressed = _addressed(spans, names_re, aliases)
+
+    return speakers
+
+
+def _span_attribution(spans, idx: int) -> tuple[str, str]:
+    """For quote span idx, the adjacent narration clause that describes how it
+    is said, and which side it is on ("after"/"before"/"")."""
+    clauses = _adjacent_clauses(spans, idx)
+    return (clauses[0][1], clauses[0][0]) if clauses else ("", "")
 
 
 def _explicit_tag_text(sentence: str) -> str:
@@ -402,6 +672,9 @@ def _select_expression_tag(sentence: str, context: str, is_dialogue: bool) -> st
     is_question   = bool(_QUESTION_RE.search(sentence))
     is_exclamation = bool(_SURPRISE_RE.search(sentence))
     tag_text = _explicit_tag_text(sentence)
+    if context and context != sentence:
+        # Attribution narration ("she laughed") now lives in its own segment.
+        tag_text = f"{tag_text} {context}"
 
     # Question tags are explicit non-verbal symbols in OmniVoice. Using them on
     # every normal question adds unwanted pre-utterance sounds, so only keep
@@ -489,64 +762,47 @@ def enrich_chapter(
     Return segment dicts used by playback and export.
     """
     cleaned_text = str(chapter_text or "").strip()
-    dialogue_map = _build_dialogue_map(cleaned_text)
-    sentences = [
-        (para_idx, seg)
-        for para_idx, para in enumerate(_split_paragraph_segments(cleaned_text, chapter_title=chapter_title))
-        for seg in para
-    ]
     scene_speed = _scene_speed(cleaned_text)
+    paragraph_spans = [
+        _split_quote_spans(paragraph)
+        for paragraph in _split_paragraphs(cleaned_text, chapter_title)
+    ]
+    paragraph_spans = [(spans, ended_open) for spans, ended_open in paragraph_spans if spans]
+    speakers = _attribute_paragraphs(paragraph_spans, character_map)
 
     segments = []
-    last_speaker = None
-    for paragraph, sentence in sentences:
-        sentence = sentence.strip()
-        if not sentence:
-            continue
+    for paragraph, ((spans, _), speaker) in enumerate(zip(paragraph_spans, speakers)):
+        for span_idx, (is_quote, span_text) in enumerate(spans):
+            attribution, side = _span_attribution(spans, span_idx) if is_quote else ("", "")
+            parts = _segment_text(span_text)
+            for part_idx, sentence in enumerate(parts):
+                is_dialogue = is_quote
+                character_name = speaker if is_quote and not single_narrator_mode else None
+                is_whisper = is_quote and bool(_WHISPER_RE.search(sentence) or _WHISPER_RE.search(attribution))
 
-        is_dialogue = _has_dialogue(sentence)
-        speaker = _find_speaker(sentence, dialogue_map, last_speaker) if is_dialogue else None
-        if speaker and speaker not in character_map:
-            speaker = None
-        if speaker:
-            last_speaker = speaker
+                if character_name:
+                    instruct = character_map.get(character_name, {}).get("instruct") or narrator_instruct
+                else:
+                    instruct = narrator_instruct
+                if is_whisper and (single_narrator_mode or character_name) and "whisper" not in instruct:
+                    instruct = instruct + ", whisper"
 
-        is_whisper = bool(_WHISPER_RE.search(sentence))
-        character_name = None if single_narrator_mode else speaker
-        if single_narrator_mode:
-            instruct = narrator_instruct
-        else:
-            instruct = (
-                character_map.get(speaker, {}).get("instruct", narrator_instruct)
-                if speaker
-                else narrator_instruct
-            )
-
-        if is_whisper and single_narrator_mode:
-            if "whisper" not in narrator_instruct:
-                instruct = narrator_instruct + ", whisper"
-        elif is_whisper and speaker and speaker in character_map:
-            base = character_map[speaker].get("instruct", narrator_instruct)
-            if "whisper" not in base:
-                instruct = base + ", whisper"
-
-        # Use the last 3 sentences as context so multi-sentence scene build-up
-        # (e.g. shock/surprise described two sentences before the dialogue) is
-        # captured and the correct emotion tag is selected.
-        context = sentence.strip()
-        enriched, tag = _inject_tags(sentence, context, is_dialogue)
-        speed = _segment_speed(sentence, is_dialogue, scene_speed, tag, is_whisper)
-        segments.append(
-            {
-                "text": sentence,
-                "enriched_text": enriched,
-                "character_name": character_name,
-                "instruct": instruct,
-                "speed": speed,
-                "is_dialogue": is_dialogue,
-                "is_whisper": is_whisper,
-                "paragraph": paragraph,
-            }
-        )
+                # Only the part touching the attribution ("she laughed") sees it.
+                touches = (side == "after" and part_idx == len(parts) - 1) or (side == "before" and part_idx == 0)
+                context = attribution if touches else sentence
+                enriched, tag = _inject_tags(sentence, context, is_dialogue)
+                speed = _segment_speed(sentence, is_dialogue, scene_speed, tag, is_whisper)
+                segments.append(
+                    {
+                        "text": sentence,
+                        "enriched_text": enriched,
+                        "character_name": character_name,
+                        "instruct": instruct,
+                        "speed": speed,
+                        "is_dialogue": is_dialogue,
+                        "is_whisper": is_whisper,
+                        "paragraph": paragraph,
+                    }
+                )
 
     return segments
