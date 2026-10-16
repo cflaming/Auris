@@ -201,9 +201,11 @@ def _segments_match_rows(segs: list[dict], rows) -> bool:
 
 
 def _ensure_chapter_segments(book_id: int, chapter_id: int):
+    """Return (segs, rows): freshly computed segments and their stored rows,
+    which correspond index for index."""
     segs = _compute_segments_for_chapter(book_id, chapter_id)
     if not segs:
-        return []
+        return [], []
 
     with get_conn() as conn:
         rows = conn.execute(
@@ -219,7 +221,7 @@ def _ensure_chapter_segments(book_id: int, chapter_id: int):
                 (book_id, chapter_id)
             ).fetchall()
 
-    return rows
+    return segs, rows
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -734,18 +736,19 @@ def get_segments(book_id, chapter_id):
     """Return segment metadata, rebuilding if enriched_text is stale (e.g. emotion tags changed)."""
     ch_lock = _get_chapter_build_lock(book_id, chapter_id)
     with ch_lock:
-        rows = _ensure_chapter_segments(book_id, chapter_id)
+        segs, rows = _ensure_chapter_segments(book_id, chapter_id)
     if not rows:
         return jsonify([])
     return jsonify([{
         'segment_index': r['segment_index'],
+        'paragraph': s['paragraph'],
         'text': r['text'],
         'character_name': r['character_name'],
         'is_dialogue': bool(r['is_dialogue']),
         'has_audio': bool(r['audio_path'] and os.path.exists(r['audio_path'])),
         'duration_sec': r['duration_sec'],
         'cache_key': r['cache_key'],
-    } for r in rows])
+    } for s, r in zip(segs, rows)])
 
 
 def _store_segments(book_id, chapter_id, segs):

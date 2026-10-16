@@ -309,15 +309,17 @@ def _should_merge_sentences(buffer: str, sentence: str) -> bool:
     return not _has_dialogue(buffer) and not _has_dialogue(sentence) and combined_words <= 22
 
 
-def _split_sentences(text: str, chapter_title: str | None = None) -> list[str]:
-    paragraphs = _split_paragraphs(text, chapter_title)
-    segments: list[str] = []
+def _split_paragraph_segments(text: str, chapter_title: str | None = None) -> list[list[str]]:
+    """Split text into paragraphs, each a list of TTS segments. Segments never
+    span paragraphs, so the reader can rebuild the original paragraph breaks."""
+    result: list[list[str]] = []
 
-    for paragraph in paragraphs:
+    for paragraph in _split_paragraphs(text, chapter_title):
         sentences = _split_paragraph_sentences(paragraph)
         if not sentences:
             continue
 
+        segments: list[str] = []
         buffer = ""
         for sentence in sentences:
             if not buffer:
@@ -329,8 +331,9 @@ def _split_sentences(text: str, chapter_title: str | None = None) -> list[str]:
                 buffer = sentence
         if buffer:
             segments.append(buffer)
+        result.append(segments)
 
-    return segments
+    return result
 
 
 def _build_dialogue_map(text: str) -> dict[str, str]:
@@ -487,12 +490,16 @@ def enrich_chapter(
     """
     cleaned_text = str(chapter_text or "").strip()
     dialogue_map = _build_dialogue_map(cleaned_text)
-    sentences = _split_sentences(cleaned_text, chapter_title=chapter_title)
+    sentences = [
+        (para_idx, seg)
+        for para_idx, para in enumerate(_split_paragraph_segments(cleaned_text, chapter_title=chapter_title))
+        for seg in para
+    ]
     scene_speed = _scene_speed(cleaned_text)
 
     segments = []
     last_speaker = None
-    for sentence in sentences:
+    for paragraph, sentence in sentences:
         sentence = sentence.strip()
         if not sentence:
             continue
@@ -538,6 +545,7 @@ def enrich_chapter(
                 "speed": speed,
                 "is_dialogue": is_dialogue,
                 "is_whisper": is_whisper,
+                "paragraph": paragraph,
             }
         )
 

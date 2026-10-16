@@ -252,7 +252,16 @@ function renderContent(segs) {
     return;
   }
 
-  const html = segs.map((seg, i) => {
+  // Segments never span paragraphs; group consecutive segments that share a
+  // paragraph index back into <p> elements so the page keeps its layout.
+  const paras = [];
+  segs.forEach((seg, i) => {
+    const last = paras[paras.length - 1];
+    if (last && last.para === seg.paragraph) last.items.push([seg, i]);
+    else paras.push({ para: seg.paragraph, items: [[seg, i]] });
+  });
+
+  const renderSeg = (seg, i) => {
     const words = seg.text.split(/(\s+)/);
     const wordSpans = words.map((w, wi) => {
       if (/^\s+$/.test(w)) return w;
@@ -263,8 +272,9 @@ function renderContent(segs) {
     const charAttr = seg.character_name ? ` data-char="${esc(seg.character_name)}"` : '';
     const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '');
     return `<span class="${cls}" data-idx="${i}"${charAttr} onclick="jumpTo(${i})">${wordSpans}</span> `;
-  }).join('');
+  };
 
+  const html = paras.map(p => `<p>${p.items.map(([seg, i]) => renderSeg(seg, i)).join('')}</p>`).join('');
   container.innerHTML = `<div>${html}</div>`;
 
   // Restore font prefs (font may be reset by innerHTML)
