@@ -55,6 +55,8 @@ reader\setup.bat
 bash reader/setup.sh
 ```
 
+`setup.bat` and `setup.sh` create `reader/.venv` with [uv](https://docs.astral.sh/uv/) when it is available, directly or through `mise exec`, so no separately installed Python is needed; uv downloads Python 3.11 (`AURIS_PYTHON=3.12` selects another version). An existing `.venv` on a different Python version is recreated. Without uv they fall back to `python3`/`python` (or the `py` launcher on Windows).
+
 Or directly:
 
 ```bash
