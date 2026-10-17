@@ -1583,6 +1583,20 @@ window.addEventListener('beforeunload', () => flushProgressSave({ useBeacon: tru
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     flushProgressSave({ useBeacon: true, force: true });
+    return;
+  }
+  // On unlock: audio may have advanced many segments while the RAF was paused.
+  // Jump directly to the correct segment instead of cascading one per frame.
+  if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
+  const t = audio.currentTime;
+  let correct = currentSegIdx;
+  for (let i = 0; i < segments.length; i++) {
+    if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
+  }
+  if (correct !== currentSegIdx) {
+    setCurrentSegment(correct, { highlight: true, save: false });
+    const dur = _segEnd[correct] !== undefined ? _segEnd[correct] - _segStart[correct] : 0;
+    startWordHighlight(correct, dur);
   }
 });
 
