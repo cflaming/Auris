@@ -530,7 +530,7 @@ async function _fetchAndAppendSeg(idx, genId) {
   _segDurations[idx] = data.duration_sec;
 
   try { await _sbAppend(buf); }
-  catch (_) { return false; }
+  catch (_) { delete _segStart[idx]; return false; }
 
   const actualEnd = _sb?.buffered.length > 0
     ? _sb.buffered.end(_sb.buffered.length - 1)
@@ -899,35 +899,48 @@ let _wordRafId = null;
 
 function startWordHighlight(segIdx, durationSec) {
   stopWordHighlight();
-  if (!durationSec) return;
-
-  const wordEls = document.querySelectorAll(`.word[data-seg="${segIdx}"]`);
   // MSE or full-chapter: use the segment's absolute position in the chapter timeline
   const _useTimeline = _mseOk || _fullChapterMode;
-  // Keep the RAF loop running in timeline mode even with no word spans
-  // (section-break segments have no .word elements but still need advancement).
+  // In timeline mode keep the RAF running even with no duration — we still need
+  // to detect segment transitions and retry appends for segments whose TTS was
+  // still in progress when we reached them.
+  if (!durationSec && !_useTimeline) return;
+
+  const wordEls = document.querySelectorAll(`.word[data-seg="${segIdx}"]`);
   if (!wordEls.length && !_useTimeline) return;
 
   const n        = wordEls.length;
   const segStart = _useTimeline ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
+  let   retryAt  = 0; // throttle: retry _appendAhead when next segments are missing
 
   function tick() {
     const t = audio.currentTime;
 
     // MSE or full-chapter: detect natural transition to the next segment.
-    // Scan forward past any segments that failed TTS and have no _segStart entry.
+    // Scan forward past any segments that haven't been appended yet.
     if (_useTimeline && isPlaying) {
+      let firstMissing = -1;
       for (let ni = segIdx + 1; ni < segments.length; ni++) {
         const nextStart = _segStart[ni];
-        if (nextStart === undefined) continue; // segment was skipped (TTS failed)
+        if (nextStart === undefined) {
+          if (firstMissing < 0) firstMissing = ni; // first unappended segment
+          continue;
+        }
         if (t >= nextStart) { _onSegmentChange(ni); return; }
         break; // next defined segment hasn't started yet
       }
+      // If we're waiting on a segment whose TTS wasn't ready, retry the append.
+      if (firstMissing >= 0 && Date.now() >= retryAt) {
+        retryAt = Date.now() + 2000;
+        _appendAhead(firstMissing, _mseGenId);
+      }
     }
 
-    const elapsed = t - segStart;
-    const wordIdx = Math.min(Math.floor((elapsed / durationSec) * n), n - 1);
-    wordEls.forEach((el, i) => el.classList.toggle('playing', i === wordIdx));
+    if (durationSec && n > 0) {
+      const elapsed = t - segStart;
+      const wordIdx = Math.min(Math.floor((elapsed / durationSec) * n), n - 1);
+      wordEls.forEach((el, i) => el.classList.toggle('playing', i === wordIdx));
+    }
     if (isPlaying && !audio.paused) _wordRafId = requestAnimationFrame(tick);
   }
 

@@ -10,6 +10,7 @@ import re
 import threading
 import time
 import uuid
+import wave
 
 from flask import (
     Flask, jsonify, render_template, request,
@@ -801,25 +802,24 @@ def tts_load():
     return jsonify({'ok': True})
 
 
-_SILENCE_CACHE_KEY = 'a' * 32  # fixed key — all section breaks share one silence file
-_SILENCE_DURATION  = 1.5       # seconds
-_SILENCE_SAMPLE_RATE = 24_000  # match TTS engine output rate
+_SILENCE_CACHE_KEY   = 'a' * 32  # fixed key — all section breaks share one silence file
+_SILENCE_DURATION    = 1.5       # seconds
+_SILENCE_SAMPLE_RATE = 24_000    # match TTS engine output rate
+_silence_file_ready  = False     # avoids repeated stat() after first generation
 
 
-def _section_break_silence(seg, book_id, chapter_id, segment_index):
-    from core.tts_engine import AUDIO_CACHE_DIR
-    wav_path = os.path.join(AUDIO_CACHE_DIR, f'{_SILENCE_CACHE_KEY}.wav')
-    if not os.path.exists(wav_path):
-        import io, wave
-        n = int(_SILENCE_DURATION * _SILENCE_SAMPLE_RATE)
-        buf = io.BytesIO()
-        with wave.open(buf, 'wb') as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)
-            wf.setframerate(_SILENCE_SAMPLE_RATE)
-            wf.writeframes(b'\x00\x00' * n)
-        with open(wav_path, 'wb') as f:
-            f.write(buf.getvalue())
+def _section_break_silence(seg, segment_index):
+    global _silence_file_ready
+    wav_path = os.path.join(_ACD, f'{_SILENCE_CACHE_KEY}.wav')
+    if not _silence_file_ready:
+        if not os.path.exists(wav_path):
+            n = int(_SILENCE_DURATION * _SILENCE_SAMPLE_RATE)
+            with wave.open(wav_path, 'wb') as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(_SILENCE_SAMPLE_RATE)
+                wf.writeframes(b'\x00\x00' * n)
+        _silence_file_ready = True
     if seg.get('cache_key') != _SILENCE_CACHE_KEY:
         with get_conn() as conn:
             conn.execute(
@@ -879,7 +879,7 @@ def tts_generate():
 
     # Section break: serve a short silence rather than running TTS on the ellipsis text.
     if not seg.get('text'):
-        return _section_break_silence(seg, book_id, chapter_id, segment_index)
+        return _section_break_silence(seg, segment_index)
 
     if seg.get('audio_path') and os.path.exists(seg['audio_path']):
         rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])

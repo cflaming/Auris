@@ -436,6 +436,10 @@ def _split_quote_spans(paragraph: str) -> tuple[list[tuple[bool, str]], bool]:
             buf.append(ch)
     ended_open = inside and bool("".join(buf).strip())
     flush(inside)
+    # A paragraph with no alphanumeric content (e.g. a dinkus "-----") produces no spans
+    # via flush — emit the whole paragraph rather than returning an empty list.
+    if not spans and paragraph.strip():
+        spans.append((False, paragraph.strip()))
     return spans, ended_open
 
 
@@ -788,12 +792,9 @@ def enrich_chapter(
     scene_speed = _scene_speed(cleaned_text)
     paragraph_spans = []
     for para in _split_paragraphs(cleaned_text, chapter_title):
-        if _DINKUS_RE.match(para.strip()):
-            paragraph_spans.append(([(False, para)], False))
-        else:
-            spans, ended_open = _split_quote_spans(para)
-            if spans:
-                paragraph_spans.append((spans, ended_open))
+        spans, ended_open = _split_quote_spans(para)
+        if spans:
+            paragraph_spans.append((spans, ended_open))
     speakers = _attribute_paragraphs(paragraph_spans, character_map)
 
     segments = []
