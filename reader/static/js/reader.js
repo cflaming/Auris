@@ -461,7 +461,7 @@ function fetchSegmentData(idx) {
 
 // ── MSE helpers ───────────────────────────────────────────────────────────────
 
-function _teardownMSE() {
+function _teardownMSE({ keepSrc = false } = {}) {
   _sbReady = false;
   _mseNext = 0;
   for (const { rej } of _sbQ) rej(new Error('MSE closed'));
@@ -471,7 +471,7 @@ function _teardownMSE() {
     if (_ms.readyState === 'open') try { _ms.endOfStream(); } catch (_) {}
     _ms = null;
   }
-  if (!_autoAdvancing) audio.src = '';
+  if (!keepSrc && !_autoAdvancing) audio.src = '';
   _segStart = {};
   _segEnd   = {};
   _chapterAudioChId    = null;
@@ -479,7 +479,7 @@ function _teardownMSE() {
 }
 
 function _initMSE(startOffset = 0) {
-  _teardownMSE();
+  _teardownMSE({ keepSrc: true });
   ++_mseGenId;
   const myId = _mseGenId;
   return new Promise(resolve => {
@@ -695,6 +695,11 @@ async function _playSegmentChapterMode(idx, gen) {
     }
     if (gen !== _playGen || !isPlaying) return true;
     audio.currentTime = start;
+    await new Promise(r => {
+      audio.addEventListener('seeked', r, { once: true });
+      audio.addEventListener('error',  r, { once: true });
+    });
+    if (gen !== _playGen || !isPlaying) return true;
   }
 
   charEl.textContent = charLabel;
@@ -768,12 +773,21 @@ async function playSegment(idx) {
 
       if (gen !== _playGen || !isPlaying) return;
 
-      // Seek to segment start unless already paused inside it
+      // Seek to segment start unless already paused inside it.
+      // Await the 'seeked' event so the RAF starts with a settled currentTime —
+      // a stale pre-seek position causes immediate spurious segment transitions.
       const start = _segStart[idx];
       if (start !== undefined) {
         const inRange = audio.currentTime >= start &&
                         audio.currentTime <  (_segEnd[idx] ?? start + 1);
-        if (!inRange) audio.currentTime = start;
+        if (!inRange) {
+          audio.currentTime = start;
+          await new Promise(r => {
+            audio.addEventListener('seeked', r, { once: true });
+            audio.addEventListener('error',  r, { once: true });
+          });
+          if (gen !== _playGen || !isPlaying) return;
+        }
       }
 
       charEl.textContent = charLabel;
@@ -888,7 +902,8 @@ function _onAudioEnded(e) {
   }
 }
 
-function _onAudioError() {
+function _onAudioError(e) {
+  if (e?.target !== audio) return;
   stopWordHighlight();
   if (!isPlaying) return;
   // Evict cached promise so the segment will be re-fetched on retry
