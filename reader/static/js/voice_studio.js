@@ -125,11 +125,17 @@ function initNarratorControls() {
     ["narrator-accent", parsed.accent],
   ];
 
+  const narratorSaveBtn = document.getElementById("narrator-save-btn");
+  const savedNarratorInstruct = NARRATOR_INSTRUCT || DEFAULT_NARRATOR_INSTRUCT;
+
   pairs.forEach(([id, value]) => {
     const el = document.getElementById(id);
     if (!el) return;
     el.value = value;
-    el.addEventListener("change", updateNarratorPreview);
+    el.addEventListener("change", () => {
+      const current = updateNarratorPreview();
+      if (narratorSaveBtn) narratorSaveBtn.disabled = current === savedNarratorInstruct;
+    });
   });
 
   const toggle = document.getElementById("single-narrator-mode");
@@ -138,6 +144,7 @@ function initNarratorControls() {
     toggle.addEventListener("change", () => {
       singleNarratorMode = toggle.checked;
       syncSingleNarratorUI();
+      if (narratorSaveBtn) narratorSaveBtn.disabled = false;
     });
   }
 
@@ -208,7 +215,7 @@ async function loadCharacters() {
           <div class="char-card-footer">
             <span class="instruct-preview" id="ins-${ch.id}">${esc(ch.instruct)}</span>
             <button class="btn btn-sm btn-ghost preview-btn" onclick="previewChar(${ch.id})">&#9654; Preview</button>
-            <button class="btn btn-sm btn-primary" onclick="saveChar(${ch.id})">Save</button>
+            <button class="btn btn-sm btn-primary" id="save-${ch.id}" disabled onclick="saveChar(${ch.id})">Save</button>
           </div>
           <div class="clone-section">
             <label>Or upload reference audio (WAV) for voice cloning:</label>
@@ -221,10 +228,15 @@ async function loadCharacters() {
     .join("");
 
   chars.forEach((ch) => {
+    const savedInstruct = ch.instruct;
+    const saveBtn = document.getElementById(`save-${ch.id}`);
     ["g", "a", "p", "ac"].forEach((prefix) => {
       const el = document.getElementById(`${prefix}-${ch.id}`);
       if (el) {
-        el.addEventListener("change", () => updateInstructPreview(ch.id));
+        el.addEventListener("change", () => {
+          const current = updateInstructPreview(ch.id);
+          if (saveBtn) saveBtn.disabled = current === savedInstruct;
+        });
       }
     });
     updateInstructPreview(ch.id);
@@ -254,6 +266,8 @@ async function saveChar(charId) {
   const d = await r.json();
   if (d.ok) {
     flashSaved(document.getElementById(`ins-${charId}`));
+    const saveBtn = document.getElementById(`save-${charId}`);
+    if (saveBtn) saveBtn.disabled = true;
   } else if (d.error) {
     alert(`Save failed: ${d.error}`);
   }
@@ -342,6 +356,8 @@ async function saveNarrator() {
     singleNarratorMode = Boolean(d.single_narrator_mode);
     syncSingleNarratorUI();
     flashSaved(document.getElementById("narrator-instruct-preview"));
+    const saveBtn = document.getElementById("narrator-save-btn");
+    if (saveBtn) saveBtn.disabled = true;
   } else if (d.error) {
     alert(`Save failed: ${d.error}`);
   }
