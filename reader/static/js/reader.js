@@ -1651,9 +1651,10 @@ document.addEventListener('visibilitychange', () => {
     flushProgressSave({ useBeacon: true, force: true });
     return;
   }
-  // On unlock: audio may have advanced many segments while the RAF was paused.
-  // Jump directly to the correct segment instead of cascading one per frame.
-  if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
+  // On unlock: resync currentSegIdx to audio.currentTime regardless of play
+  // state. The RAF pauses while the screen is locked, so currentSegIdx can lag
+  // behind even when the user paused mid-chapter on the lock screen.
+  if (!_mseOk && !_fullChapterMode) return;
   const t = audio.currentTime;
   let correct = currentSegIdx;
   for (let i = currentSegIdx + 1; i < segments.length; i++) {
@@ -1663,7 +1664,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (correct !== currentSegIdx) {
     setCurrentSegment(correct, { highlight: true, save: false });
-    startWordHighlight(correct, _segDur(correct));
+    if (isPlaying) startWordHighlight(correct, _segDur(correct));
   }
 });
 
