@@ -400,12 +400,14 @@ code {
 }
 
 .chapter-title-bar {
-  flex: 1; font-size: 0.82rem; color: var(--text2);
+  font-size: 0.82rem; color: var(--text2);
   font-family: var(--font-family); font-style: italic;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+.mobile-chapter-header { display: none; }
 
 .font-controls { display: flex; gap: 4px; align-items: center; }
+.toolbar-chapter-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .reader-toolbar .btn { height: 28px; box-sizing: border-box; }
 #toc-toggle, #bookmark-btn, #bm-panel-toggle { font-size: 1rem; }
 .chapter-progress-bar {
@@ -957,11 +959,20 @@ body.theme-paper .voice-swatch[style] {
     left: 0; right: 0;
     z-index: 90;
   }
-  .chapter-title-bar {
-    order: unset; width: auto; flex: 1;
-    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  .toolbar-chapter-info { display: none; }
+  .mobile-chapter-header {
+    display: block;
+    padding: 10px 16px 8px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg);
   }
-  .reading-estimate { display: none; }
+  .mobile-chapter-header .chapter-title-bar {
+    display: block; font-size: 0.9rem;
+    white-space: normal; overflow: visible; text-overflow: unset;
+  }
+  .mobile-chapter-header .reading-estimate {
+    display: block; font-size: 0.72rem; margin-top: 2px;
+  }
   .font-controls {
     order: unset; overflow-x: auto; padding: 0;
     flex-shrink: 1; min-width: 0;

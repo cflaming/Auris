@@ -21,8 +21,10 @@
   <main class="reader-main" id="reader-main">
     <div class="reader-toolbar">
       <button id="toc-toggle" class="btn btn-sm btn-ghost" title="Toggle contents (C)">&#8801;</button>
-      <span id="chapter-title" class="chapter-title-bar"></span>
-      <span id="reading-estimate" class="reading-estimate"></span>
+      <div class="toolbar-chapter-info">
+        <span id="chapter-title" class="chapter-title-bar"></span>
+        <span id="reading-estimate" class="reading-estimate"></span>
+      </div>
 
       <div class="font-controls">
         <button class="btn btn-sm btn-ghost" onclick="changeFontSize(-1)" title="Smaller text">A&#8722;</button>
@@ -40,6 +42,7 @@
     </div>
 
     <div id="voice-legend" class="voice-legend" hidden></div>
+    <div id="mobile-chapter-header" class="mobile-chapter-header hidden"></div>
     <div id="chapter-content" class="chapter-content">
       <div class="placeholder-text">Select a chapter from the sidebar to begin reading.</div>
     </div>

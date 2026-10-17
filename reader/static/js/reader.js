@@ -1,4 +1,5 @@
 const BOOK_ID = window.BOOK_ID;
+const MOBILE_BREAKPOINT = 768;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let chapters        = [];
@@ -227,8 +228,14 @@ async function openChapter(chapterId, options = {}) {
 
   const wpm = 250;
   const minutes = Math.round((ch.word_count || 0) / wpm);
+  const estText = minutes > 0 ? `~${minutes} min read` : '';
   const estEl = document.getElementById('reading-estimate');
-  if (estEl) estEl.textContent = minutes > 0 ? `~${minutes} min read` : '';
+  if (estEl) estEl.textContent = estText;
+
+  if (_mobileChapterHeader) {
+    _mobileChapterHeader.innerHTML = `<span class="chapter-title-bar">${esc(ch.title)}</span>${minutes > 0 ? `<span class="reading-estimate">${estText}</span>` : ''}`;
+    _mobileChapterHeader.classList.remove('hidden');
+  }
 
   const [segs, chars] = await Promise.all([
     fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
@@ -625,17 +632,19 @@ document.getElementById('speed-slider').oninput = function() {
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────
 
-const _tocSidebar  = document.getElementById('toc-sidebar');
-const _tocBackdrop = document.getElementById('toc-backdrop');
+const _tocSidebar         = document.getElementById('toc-sidebar');
+const _tocBackdrop        = document.getElementById('toc-backdrop');
+const _mobileChapterHeader = document.getElementById('mobile-chapter-header');
+const _topnav             = document.querySelector('.topnav');
 
 document.getElementById('toc-toggle').onclick = () => {
-  const isMobile = window.innerWidth <= 768;
+  const isMobile = window.innerWidth <= MOBILE_BREAKPOINT;
   _tocSidebar.classList.toggle('collapsed');
   if (isMobile && _tocBackdrop) _tocBackdrop.classList.toggle('hidden', _tocSidebar.classList.contains('collapsed'));
 };
 
 function closeTocOnMobile() {
-  if (window.innerWidth > 768) return;
+  if (window.innerWidth > MOBILE_BREAKPOINT) return;
   _tocSidebar.classList.add('collapsed');
   if (_tocBackdrop) _tocBackdrop.classList.add('hidden');
 }
@@ -900,6 +909,12 @@ document.addEventListener('visibilitychange', () => {
     flushProgressSave({ useBeacon: true, force: true });
   }
 });
+
+if (_topnav) {
+  const _syncTopnavHeight = () => document.documentElement.style.setProperty('--topnav-height', _topnav.offsetHeight + 'px');
+  _syncTopnavHeight();
+  new ResizeObserver(_syncTopnavHeight).observe(_topnav);
+}
 
 closeTocOnMobile();
 
