@@ -64,6 +64,7 @@ DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 
 _export_jobs: dict = {}
 _chapter_prerender_jobs: dict = {}  # (book_id, chapter_id) -> job_id for in-progress renders
+_prerender_sem = threading.Semaphore(1)  # one prerender job runs at a time (single GPU)
 
 # ── Seg-mode TTS activity tracker ────────────────────────────────────────────
 from collections import deque as _deque
@@ -1029,6 +1030,8 @@ def serve_audio_fmp4(cache_key):
 
 def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
     job = _export_jobs[job_id]
+    job['message'] = 'Waiting for GPU…'
+    _prerender_sem.acquire()
     try:
         job['state'] = 'running'
         job['message'] = 'Loading segments...'
@@ -1081,6 +1084,7 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         job['state'] = 'failed'
         job['error'] = str(e)
     finally:
+        _prerender_sem.release()
         _chapter_prerender_jobs.pop((book_id, chapter_id), None)
 
 
