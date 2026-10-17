@@ -200,6 +200,7 @@ async function loadTOC() {
 }
 
 async function openChapter(chapterId, options = {}) {
+  closeTocOnMobile();
   const {
     resumePosition = 0,
     persistCurrent = true,
@@ -624,9 +625,20 @@ document.getElementById('speed-slider').oninput = function() {
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────
 
+const _tocSidebar  = document.getElementById('toc-sidebar');
+const _tocBackdrop = document.getElementById('toc-backdrop');
+
 document.getElementById('toc-toggle').onclick = () => {
-  document.getElementById('toc-sidebar').classList.toggle('collapsed');
+  const isMobile = window.innerWidth <= 768;
+  _tocSidebar.classList.toggle('collapsed');
+  if (isMobile && _tocBackdrop) _tocBackdrop.classList.toggle('hidden', _tocSidebar.classList.contains('collapsed'));
 };
+
+function closeTocOnMobile() {
+  if (window.innerWidth > 768) return;
+  _tocSidebar.classList.add('collapsed');
+  if (_tocBackdrop) _tocBackdrop.classList.add('hidden');
+}
 
 function toggleBookmarkPanel() {
   document.getElementById('bookmarks-panel').classList.toggle('collapsed');
@@ -888,5 +900,7 @@ document.addEventListener('visibilitychange', () => {
     flushProgressSave({ useBeacon: true, force: true });
   }
 });
+
+closeTocOnMobile();
 
 loadTOC();

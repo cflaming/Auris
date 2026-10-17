@@ -3,6 +3,9 @@
 {% block content %}
 <div class="reader-layout">
 
+  <!-- Backdrop for mobile TOC -->
+  <div class="toc-backdrop hidden" id="toc-backdrop" onclick="closeTocOnMobile()"></div>
+
   <!-- Left: Table of Contents -->
   <aside class="toc-sidebar" id="toc-sidebar">
     <div class="toc-header">
@@ -27,8 +30,8 @@
         <button class="btn btn-sm btn-ghost" id="theme-cycle-btn" onclick="cycleTheme()" title="Cycle theme (T)">&#9675;</button>
         <button class="btn btn-sm btn-ghost" id="voices-btn" onclick="toggleVoices()" title="Show who reads each line (V)">&#9834;</button>
         <button class="btn btn-sm btn-ghost" id="bookmark-btn" onclick="addBookmark()" title="Add bookmark (B)">&#9734;</button>
-        <button class="btn btn-sm btn-ghost" id="bm-panel-toggle" onclick="toggleBookmarkPanel()" title="Bookmarks">&#9776;</button>
-        <button class="btn btn-sm btn-ghost" id="shortcuts-btn" onclick="showShortcuts()" title="Keyboard shortcuts (?)">?</button>
+        <button class="btn btn-sm btn-ghost" id="bm-panel-toggle" onclick="toggleBookmarkPanel()" title="Bookmarks">&#9733;</button>
+        <button class="btn btn-sm btn-ghost mobile-hidden" id="shortcuts-btn" onclick="showShortcuts()" title="Keyboard shortcuts (?)">?</button>
       </div>
     </div>
 
