@@ -1062,6 +1062,25 @@ function updatePlaybackUI() {
 
 // ── Media Session (lock-screen / notification controls) ───────────────────────
 
+// Time-based seek for MSE / Full Chapter modes. Returns false in WAV mode
+// (caller falls back to segment-hop). Scans all _segStart entries since
+// direction of seek is unknown (forward or backward).
+function _seekToTime(targetTime) {
+  if (!_mseOk && !_fullChapterMode) return false;
+  const t = Math.max(0, Math.min(targetTime, audio.duration || targetTime));
+  audio.currentTime = t;
+  let correct = 0;
+  for (let i = 0; i < segments.length; i++) {
+    if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
+    else if (_segStart[i] !== undefined) break;
+  }
+  if (correct !== currentSegIdx) {
+    setCurrentSegment(correct, { highlight: true, save: false });
+    if (isPlaying) startWordHighlight(correct, _segDur(correct));
+  }
+  return true;
+}
+
 function updateMediaSession(playing) {
   if (!('mediaSession' in navigator)) return;
   navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
@@ -1120,21 +1139,17 @@ function initMediaSession() {
   navigator.mediaSession.setActionHandler('pause', () => {
     if (isPlaying) { isPlaying = false; stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
   });
-  navigator.mediaSession.setActionHandler('previoustrack', () => {
-    const idx = chapters.findIndex(c => c.id === currentChapterId);
-    if (idx > 0) openChapter(chapters[idx - 1].id);
+  navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+    if (!_seekToTime(audio.currentTime - (details?.seekOffset ?? 10))) {
+      const prev = Math.max(currentSegIdx - 1, 0);
+      if (isPlaying) playSegment(prev); else setCurrentSegment(prev, { highlight: true, save: true });
+    }
   });
-  navigator.mediaSession.setActionHandler('nexttrack', () => {
-    const idx = chapters.findIndex(c => c.id === currentChapterId);
-    if (idx >= 0 && idx < chapters.length - 1) openChapter(chapters[idx + 1].id);
-  });
-  navigator.mediaSession.setActionHandler('seekbackward', () => {
-    const prev = Math.max(currentSegIdx - 1, 0);
-    if (isPlaying) playSegment(prev); else setCurrentSegment(prev, { highlight: true, save: true });
-  });
-  navigator.mediaSession.setActionHandler('seekforward', () => {
-    const next = Math.min(currentSegIdx + 1, segments.length - 1);
-    if (isPlaying) playSegment(next); else setCurrentSegment(next, { highlight: true, save: true });
+  navigator.mediaSession.setActionHandler('seekforward', (details) => {
+    if (!_seekToTime(audio.currentTime + (details?.seekOffset ?? 10))) {
+      const next = Math.min(currentSegIdx + 1, segments.length - 1);
+      if (isPlaying) playSegment(next); else setCurrentSegment(next, { highlight: true, save: true });
+    }
   });
   navigator.mediaSession.setActionHandler('stop', () => stopPlayback());
 }
