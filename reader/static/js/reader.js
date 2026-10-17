@@ -817,12 +817,6 @@ function _preloadNextChapter() {
 }
 
 async function _advanceChapter() {
-  if (_sleepOnChapterEnd) {
-    _sleepOnChapterEnd = false;
-    _updateSleepTimerUI();
-    stopPlayback();
-    return;
-  }
   const idx = chapters.findIndex(c => c.id === currentChapterId);
   if (idx >= 0 && idx < chapters.length - 1) {
     await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
@@ -853,6 +847,7 @@ function _onAudioEnded(e) {
   const wholeChapter = (_mseOk && _sbReady) || (_fullChapterMode && _chapterAudioChId === currentChapterId);
   if (wholeChapter) {
     queueProgressSave(currentChapterId, currentSegIdx);
+    if (_sleepOnChapterEnd) { _sleepOnChapterEnd = false; _updateSleepTimerUI(); stopPlayback(); return; }
     _advanceChapter();
     return;
   }
@@ -861,6 +856,7 @@ function _onAudioEnded(e) {
   if (next < segments.length) playSegment(next);
   else {
     queueProgressSave(currentChapterId, currentSegIdx);
+    if (_sleepOnChapterEnd) { _sleepOnChapterEnd = false; _updateSleepTimerUI(); stopPlayback(); return; }
     _advanceChapter();
   }
 }
@@ -1074,10 +1070,13 @@ function initMediaSession() {
 
 // ── Sleep timer ───────────────────────────────────────────────────────────────
 
+function _clearSleepTimer() {
+  clearTimeout(_sleepTimerId);  _sleepTimerId = null;
+  clearInterval(_sleepCountdownId); _sleepCountdownId = null;
+}
+
 function setSleepTimer(minutes) {
-  // Clear any running timer first
-  if (_sleepTimerId)     { clearTimeout(_sleepTimerId);   _sleepTimerId = null; }
-  if (_sleepCountdownId) { clearInterval(_sleepCountdownId); _sleepCountdownId = null; }
+  _clearSleepTimer();
   _sleepTimerEnd     = 0;
   _sleepOnChapterEnd = false;
   _sleepTimerFired   = false;
@@ -1098,9 +1097,8 @@ function setSleepTimer(minutes) {
 }
 
 function _onSleepTimerFired() {
-  _sleepTimerId = null;
-  _sleepTimerEnd = 0;
-  if (_sleepCountdownId) { clearInterval(_sleepCountdownId); _sleepCountdownId = null; }
+  _clearSleepTimer();
+  _sleepTimerEnd   = 0;
   _sleepTimerFired = true;
   stopPlayback();
   _updateSleepTimerUI();
@@ -1126,7 +1124,6 @@ function _updateSleepTimerUI() {
 
 document.getElementById('sleep-btn').onclick = () => {
   document.getElementById('sleep-dropdown').classList.toggle('hidden');
-  document.getElementById('export-dropdown').classList.add('hidden');
 };
 document.addEventListener('click', (e) => {
   if (!e.target.closest('.sleep-menu-wrap'))
@@ -1364,7 +1361,6 @@ function gotoBookmark(chapterId, segIdx) {
 
 document.getElementById('export-btn').onclick = () => {
   document.getElementById('export-dropdown').classList.toggle('hidden');
-  document.getElementById('sleep-dropdown').classList.add('hidden');
 };
 
 document.getElementById('do-export-btn').onclick = async () => {
