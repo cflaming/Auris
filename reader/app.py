@@ -1122,7 +1122,8 @@ def start_chapter_prerender(book_id, chapter_id):
     job['message'] = 'Queued'
     with get_conn() as conn:
         ch_row = conn.execute('SELECT title FROM chapters WHERE id=?', (chapter_id,)).fetchone()
-    job['chapter_label'] = ch_row['title'] if ch_row else f'chapter {chapter_id}'
+    title = ch_row['title'] if ch_row else None
+    job['chapter_label'] = title or f'book {book_id} / chapter {chapter_id}'
     _chapter_prerender_jobs[key] = job_id
     _prerender_queue.put((job_id, book_id, chapter_id))
     return jsonify({'job_id': job_id})
