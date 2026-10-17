@@ -140,6 +140,19 @@ def _clear_book_tts_segments(book_id: int):
         conn.execute('DELETE FROM tts_segments WHERE book_id=?', (book_id,))
 
 
+def _character_map(rows) -> dict:
+    """name -> character dict; merged characters carry 'canonical', the name
+    of the character whose voice they use."""
+    by_id = {r['id']: dict(r) for r in rows}
+    char_map = {}
+    for c in by_id.values():
+        target = by_id.get(c.get('alias_of'))
+        if target and target['id'] != c['id']:
+            c['canonical'] = target['name']
+        char_map[c['name']] = c
+    return char_map
+
+
 def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
     with get_conn() as conn:
         ch = conn.execute(
@@ -158,7 +171,7 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
     if not ch:
         return []
 
-    char_map = {r['name']: dict(r) for r in chars}
+    char_map = _character_map(chars)
     segs = enrichment.enrich_chapter(
         ch['content'],
         char_map,
@@ -456,15 +469,34 @@ def list_characters(book_id):
 @app.route('/api/books/<int:book_id>/characters/<int:char_id>', methods=['PUT'])
 def update_character(book_id, char_id):
     body = request.get_json(force=True) or {}
-    allowed = {'instruct', 'gender', 'color_hex', 'ref_audio_path'}
+    allowed = {'instruct', 'gender', 'color_hex', 'ref_audio_path', 'alias_of'}
     updates = {k: v for k, v in body.items() if k in allowed}
     if 'color_hex' in updates and not re.match(r'^#[0-9a-fA-F]{6}$', str(updates['color_hex'] or '')):
         return jsonify({'error': 'color_hex must be a #RRGGBB string'}), 400
     if not updates:
         return jsonify({'error': 'Nothing to update'}), 400
-    voice_fields = {'instruct', 'ref_audio_path'} & updates.keys()
+    voice_fields = {'instruct', 'ref_audio_path', 'alias_of'} & updates.keys()
     set_clause = ', '.join(f'{k}=?' for k in updates)
     with get_conn() as conn:
+        if 'alias_of' in updates:
+            target_id = updates['alias_of']
+            if target_id is not None:
+                if not isinstance(target_id, int) or isinstance(target_id, bool) or target_id == char_id:
+                    return jsonify({'error': 'alias_of must be another character id or null'}), 400
+                target = conn.execute(
+                    'SELECT id, alias_of FROM characters WHERE id=? AND book_id=?',
+                    (target_id, book_id)
+                ).fetchone()
+                if not target:
+                    return jsonify({'error': 'alias_of character not found in this book'}), 400
+                if target['alias_of'] is not None:
+                    return jsonify({'error': 'Cannot merge into a character that is itself merged'}), 400
+                # Keep merges one level deep: this character's own aliases
+                # follow it to the new target.
+                conn.execute(
+                    'UPDATE characters SET alias_of=? WHERE alias_of=? AND book_id=?',
+                    (target_id, char_id, book_id)
+                )
         conn.execute(
             f'UPDATE characters SET {set_clause} WHERE id=? AND book_id=?',
             (*updates.values(), char_id, book_id)

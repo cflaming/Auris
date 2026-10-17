@@ -715,6 +715,13 @@ body.theme-paper .voice-swatch[style] {
 .preview-btn { font-size: 0.76rem; }
 
 .clone-section { margin-top: 8px; }
+
+.merge-row {
+  display: flex; align-items: center; gap: 8px; margin-top: 10px;
+  font-size: 0.78rem; color: var(--text2);
+}
+.merged-card { opacity: .75; }
+.merged-card .studio-note { margin-top: 0; }
 .clone-section label { font-size: 0.78rem; color: var(--text2); margin-bottom: 4px; display: block; }
 
 /* ── Settings page ──────────────────────────────────────────────────────────── */

@@ -48,7 +48,8 @@ function esc(value) {
   return String(value || "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }
 
 function flashSaved(el) {
@@ -156,17 +157,48 @@ async function loadCharacters() {
     return;
   }
 
+  const byId = new Map(chars.map((ch) => [ch.id, ch]));
+  const aliasesOf = (id) => chars.filter((c) => c.alias_of === id).map((c) => c.name);
+  // Merge targets: any character that is not itself merged into another.
+  const mergeSelect = (ch) => {
+    const options = chars
+      .filter((c) => c.id !== ch.id && c.alias_of == null)
+      .map((c) => `<option value="${c.id}"${c.id === ch.alias_of ? " selected" : ""}>${esc(c.name)}</option>`)
+      .join("");
+    return `<label class="merge-row">Same character as
+      <select class="vc-select" onchange="setAlias(${ch.id}, this.value)">
+        <option value="">(none)</option>${options}
+      </select></label>`;
+  };
+
   list.innerHTML = chars
     .map((ch) => {
       const v = parseInstruct(ch.instruct);
-      const avatarStyle = `background:${ch.color_hex};color:#1a1a2e`;
+      const target = byId.get(ch.alias_of);
+      const avatarStyle = `background:${(target || ch).color_hex};color:#1a1a2e`;
       const initial = ch.name.charAt(0).toUpperCase();
       const genderBadge = `<span class="char-gender gender-${ch.gender}">${ch.gender}</span>`;
+      if (target) {
+        return `
+      <div class="character-card merged-card" id="card-${ch.id}">
+        <div class="char-avatar" style="${avatarStyle}">${initial}</div>
+        <div class="char-details">
+          <span class="char-name">${esc(ch.name)} <span class="char-freq">x ${ch.frequency}</span></span>
+          <div class="studio-note">Merged into <strong>${esc(target.name)}</strong>: lines attributed to ${esc(ch.name)} use ${esc(target.name)}'s voice and colour.</div>
+          ${mergeSelect(ch)}
+        </div>
+      </div>`;
+      }
+      const aliases = aliasesOf(ch.id);
+      const aliasNote = aliases.length
+        ? `<div class="studio-note">Also called: ${aliases.map(esc).join(", ")}</div>`
+        : "";
       return `
       <div class="character-card" id="card-${ch.id}">
         <div class="char-avatar" style="${avatarStyle}">${initial}</div>
         <div class="char-details">
           <span class="char-name">${esc(ch.name)} ${genderBadge} <span class="char-freq">x ${ch.frequency}</span></span>
+          ${aliasNote}
           <div class="voice-controls">
             ${buildSelect(GENDERS, v.gender, `g-${ch.id}`)}
             ${buildSelect(AGES, v.age, `a-${ch.id}`)}
@@ -182,6 +214,7 @@ async function loadCharacters() {
             <label>Or upload reference audio (WAV) for voice cloning:</label>
             <input type="file" accept=".wav" onchange="uploadRef(event, ${ch.id})">
           </div>
+          ${mergeSelect(ch)}
         </div>
       </div>`;
     })
@@ -196,6 +229,17 @@ async function loadCharacters() {
     });
     updateInstructPreview(ch.id);
   });
+}
+
+async function setAlias(charId, value) {
+  const r = await fetch(`/api/books/${BOOK_ID}/characters/${charId}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ alias_of: value ? Number(value) : null }),
+  });
+  const d = await r.json();
+  if (d.error) alert(`Merge failed: ${d.error}`);
+  await loadCharacters();
 }
 
 async function saveChar(charId) {
@@ -325,6 +369,7 @@ initNarratorControls();
 loadCharacters();
 
 window.saveChar = saveChar;
+window.setAlias = setAlias;
 window.previewChar = previewChar;
 window.uploadRef = uploadRef;
 window.uploadNarratorRef = uploadNarratorRef;

@@ -423,13 +423,18 @@ def _split_quote_spans(paragraph: str) -> tuple[list[tuple[bool, str]], bool]:
 
 def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str]]:
     """Regex over character names (plus title-less aliases such as "Militia"
-    for "Miss Militia") and the alias -> canonical name map."""
-    aliases = {name: name for name in character_map}
+    for "Miss Militia") and the alias -> canonical name map. A character
+    merged into another (its dict has "canonical") resolves to that one."""
+    def canonical(name: str) -> str:
+        target = (character_map.get(name) or {}).get("canonical")
+        return target if target in character_map else name
+
+    aliases = {name: canonical(name) for name in character_map}
     candidates: dict[str, set[str]] = {}
     for name in character_map:
         words = name.split()
         if len(words) > 1 and words[0].lower().rstrip(".") in _TITLE_WORDS:
-            candidates.setdefault(" ".join(words[1:]), set()).add(name)
+            candidates.setdefault(" ".join(words[1:]), set()).add(canonical(name))
     for alias, names in candidates.items():
         if len(names) == 1 and alias not in aliases:
             aliases[alias] = next(iter(names))

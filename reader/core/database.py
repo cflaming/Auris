@@ -112,6 +112,15 @@ def init_db():
         if "narrator_ref_audio_path" not in cols:
             conn.execute("ALTER TABLE books ADD COLUMN narrator_ref_audio_path TEXT")
 
+        char_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(characters)").fetchall()
+        }
+        if "alias_of" not in char_cols:
+            # Another character (same book) this one is merged into, e.g. a
+            # hero name for a civilian name. Its lines use that voice.
+            conn.execute("ALTER TABLE characters ADD COLUMN alias_of INTEGER")
+
     # Remove UNIQUE constraint from tts_segments.cache_key so identical sentences
     # in different chapters don't cause INSERT OR IGNORE to silently drop segments.
     import sqlite3 as _sqlite3
