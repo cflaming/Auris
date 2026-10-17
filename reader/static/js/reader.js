@@ -436,6 +436,10 @@ function fetchSegmentData(idx) {
     }).then(r => {
       if (!r.ok) return r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); });
       return r.json();
+    }).then(data => {
+      // 0-duration means a bad cache entry — evict and re-fetch so the server re-synthesizes.
+      if (!data.duration_sec) { _segCache.delete(idx); return fetchSegmentData(idx); }
+      return data;
     });
     // Evict on failure so the next call retries rather than re-throwing the cached rejection.
     p.catch(() => _segCache.delete(idx));

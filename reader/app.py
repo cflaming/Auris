@@ -361,8 +361,8 @@ def debug_jobs_data():
     prerender = []
     for (bid, cid), job_id in list(_chapter_prerender_jobs.items()):
         job = _export_jobs.get(job_id, {})
-        prerender.append({**job, 'id': job_id,
-                          'chapter_label': f'book {bid} / chapter {cid}'})
+        label = job.get('chapter_label') or f'book {bid} / chapter {cid}'
+        prerender.append({**job, 'id': job_id, 'chapter_label': label})
     seen_ids = {j['id'] for j in prerender}
     exports = []
     for job_id, job in list(_export_jobs.items()):
@@ -899,7 +899,7 @@ def tts_generate():
     if not seg.get('text'):
         return _section_break_silence(seg, segment_index)
 
-    if seg.get('audio_path') and os.path.exists(seg['audio_path']):
+    if seg.get('audio_path') and os.path.exists(seg['audio_path']) and seg.get('duration_sec'):
         rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
         _tts_finish(rid, cached=True, duration_sec=seg['duration_sec'])
         return jsonify({
@@ -1120,6 +1120,9 @@ def start_chapter_prerender(book_id, chapter_id):
         return jsonify({'job_id': existing})
     job_id, job = _make_export_job()
     job['message'] = 'Queued'
+    with get_conn() as conn:
+        ch_row = conn.execute('SELECT title FROM chapters WHERE id=?', (chapter_id,)).fetchone()
+    job['chapter_label'] = ch_row['title'] if ch_row else f'chapter {chapter_id}'
     _chapter_prerender_jobs[key] = job_id
     _prerender_queue.put((job_id, book_id, chapter_id))
     return jsonify({'job_id': job_id})
@@ -1170,7 +1173,7 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
 
     items, pending_segs = [], []
     for seg in segs:
-        if seg.get('audio_path') and os.path.exists(seg['audio_path']):
+        if seg.get('audio_path') and os.path.exists(seg['audio_path']) and seg.get('duration_sec'):
             if job is not None:
                 job['done'] = job.get('done', 0) + 1
             continue
@@ -1582,4 +1585,4 @@ if __name__ == '__main__':
     args = parser.parse_args()
     display_host = '127.0.0.1' if args.host == '0.0.0.0' else args.host
     print(f" * Open your browser at: http://{display_host}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
+    app.run(host=args.host, port=args.port, debug=args.debug, threaded=True, use_reloader=False)
