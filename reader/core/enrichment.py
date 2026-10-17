@@ -776,6 +776,7 @@ def enrich_chapter(
     speakers = _attribute_paragraphs(paragraph_spans, character_map)
 
     segments = []
+    last_tag: str | None = None
     for paragraph, ((spans, _), speaker) in enumerate(zip(paragraph_spans, speakers)):
         for span_idx, (is_quote, span_text) in enumerate(spans):
             attribution, side = _span_attribution(spans, span_idx) if is_quote else ("", "")
@@ -796,6 +797,10 @@ def enrich_chapter(
                 touches = (side == "after" and part_idx == len(parts) - 1) or (side == "before" and part_idx == 0)
                 context = attribution if touches else sentence
                 enriched, tag = _inject_tags(sentence, context, is_dialogue)
+                # Don't chain the same tag on back-to-back segments — it sounds repetitive.
+                if tag is not None and tag == last_tag:
+                    enriched, tag = sentence, None
+                last_tag = tag
                 speed = _segment_speed(sentence, is_dialogue, scene_speed, tag, is_whisper)
                 segments.append(
                     {
