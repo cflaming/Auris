@@ -7,7 +7,7 @@ let currentChapterId= null;
 let segments        = [];
 let currentSegIdx   = 0;
 let isPlaying       = false;
-let speedMultiplier = 1.0;
+let speedMultiplier = parseFloat(localStorage.getItem('speedMultiplier') || '1.0');
 let fontSize        = parseInt(localStorage.getItem('fontSize') || '18');
 let fontFamily      = localStorage.getItem('fontFamily') || 'serif';
 let lineHeight      = parseFloat(localStorage.getItem('lineHeight') || '1.9');
@@ -1030,10 +1030,17 @@ document.getElementById('pb-seek-bar').onclick = (e) => {
 
 document.getElementById('speed-slider').oninput = function() {
   speedMultiplier = parseFloat(this.value);
+  localStorage.setItem('speedMultiplier', speedMultiplier);
   document.getElementById('speed-val').textContent = speedMultiplier.toFixed(1) + '×';
   audio.playbackRate = speedMultiplier;
   if (!_mseOk) _audioB.playbackRate = speedMultiplier;
 };
+(function initSpeedUI() {
+  const slider = document.getElementById('speed-slider');
+  if (slider) slider.value = speedMultiplier;
+  const label = document.getElementById('speed-val');
+  if (label) label.textContent = speedMultiplier.toFixed(1) + '×';
+})();
 
 (function initModeToggle() {
   const btn = document.getElementById('mode-btn');
