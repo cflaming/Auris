@@ -821,7 +821,8 @@ _SILENCE_SAMPLE_RATE = 24_000    # match TTS engine output rate
 _silence_file_ready  = False     # avoids repeated stat() after first generation
 
 
-def _section_break_silence(seg, segment_index):
+def _ensure_section_break_audio(seg) -> str:
+    """Ensure the shared silence WAV exists and update the segment DB row to point at it."""
     global _silence_file_ready
     wav_path = os.path.join(_ACD, f'{_SILENCE_CACHE_KEY}.wav')
     if not _silence_file_ready and not os.path.exists(wav_path):
@@ -835,9 +836,14 @@ def _section_break_silence(seg, segment_index):
     if seg.get('cache_key') != _SILENCE_CACHE_KEY:
         with get_conn() as conn:
             conn.execute(
-                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
-                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, seg['id'])
+                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
+                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, 0.0, seg['id'])
             )
+    return wav_path
+
+
+def _section_break_silence(seg, segment_index):
+    _ensure_section_break_audio(seg)
     return jsonify({
         'audio_url': f'/api/audio/{_SILENCE_CACHE_KEY}',
         'duration_sec': _SILENCE_DURATION,
@@ -1165,6 +1171,13 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
     items, pending_segs = [], []
     for seg in segs:
         if seg.get('audio_path') and os.path.exists(seg['audio_path']):
+            if job is not None:
+                job['done'] = job.get('done', 0) + 1
+            continue
+        if not seg.get('text'):  # section break — use shared silence, not TTS
+            wav_path = _ensure_section_break_audio(seg)
+            seg['audio_path'] = wav_path
+            seg['duration_sec'] = _SILENCE_DURATION
             if job is not None:
                 job['done'] = job.get('done', 0) + 1
             continue
