@@ -31,6 +31,29 @@ app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+# Pre-rendered chapter audio (full-chapter fMP4 for smooth mobile playback)
+from core.tts_engine import AUDIO_CACHE_DIR as _ACD
+_CHAPTER_RENDER_DIR = os.path.join(_ACD, 'chapter_renders')
+os.makedirs(_CHAPTER_RENDER_DIR, exist_ok=True)
+
+
+def _chapter_render_fmp4(book_id: int, chapter_id: int) -> str:
+    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.fmp4')
+
+
+def _chapter_render_meta(book_id: int, chapter_id: int) -> str:
+    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.json')
+
+
+def _clear_chapter_renders(book_id: int):
+    import glob
+    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.fmp4')):
+        try: os.remove(p)
+        except OSError: pass
+    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.json')):
+        try: os.remove(p)
+        except OSError: pass
+
 tts = TTSEngine()
 
 DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
@@ -138,6 +161,7 @@ def _load_book(book_id: int):
 def _clear_book_tts_segments(book_id: int):
     with get_conn() as conn:
         conn.execute('DELETE FROM tts_segments WHERE book_id=?', (book_id,))
+    _clear_chapter_renders(book_id)
 
 
 def _character_map(rows) -> dict:
@@ -845,6 +869,92 @@ def serve_audio_fmp4(cache_key):
         except subprocess.CalledProcessError:
             return '', 500
     return send_file(fmp4_path, mimetype='audio/mp4')
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Chapter prerender API (full-chapter fMP4 for smooth mobile playback)
+# ════════════════════════════════════════════════════════════════════════════
+
+def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
+    job = _export_jobs[job_id]
+    try:
+        job['state'] = 'running'
+        job['message'] = 'Loading segments...'
+        segs = _get_chapter_segments(chapter_id, book_id)
+        job['total'] = len(segs)
+        job['done'] = 0
+        job['message'] = f'Generating audio ({len(segs)} segments)...'
+        _ensure_audio_for_chapter(book_id, chapter_id, segs, job)
+
+        job['message'] = 'Merging audio...'
+        from core.exporter import _merge_wavs, build_timeline, SAMPLE_RATE
+        import soundfile as sf
+
+        timeline = build_timeline(segs)
+        if not timeline:
+            job['state'] = 'failed'
+            job['error'] = 'No audio generated for this chapter'
+            return
+
+        merged = _merge_wavs([s['audio_path'] for s in timeline])
+
+        wav_path = _chapter_render_fmp4(book_id, chapter_id).replace('.fmp4', '.wav')
+        sf.write(wav_path, merged, SAMPLE_RATE)
+
+        job['message'] = 'Encoding audio...'
+        import subprocess
+        fmp4_path = _chapter_render_fmp4(book_id, chapter_id)
+        subprocess.run(
+            ['ffmpeg', '-i', wav_path,
+             '-c:a', 'aac', '-b:a', '128k', '-ac', '1',
+             '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+             '-y', fmp4_path],
+            check=True, capture_output=True,
+        )
+        try: os.remove(wav_path)
+        except OSError: pass
+
+        import json
+        tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
+        with open(_chapter_render_meta(book_id, chapter_id), 'w') as f:
+            json.dump({'timeline': tl}, f)
+
+        job['state'] = 'complete'
+        job['message'] = 'Done'
+        job['result'] = {
+            'audio_url': f'/api/chapter-audio/{book_id}/{chapter_id}',
+            'timeline': tl,
+        }
+    except Exception as e:
+        log.exception('Chapter prerender job %s failed', job_id)
+        job['state'] = 'failed'
+        job['error'] = str(e)
+
+
+@app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/prerender', methods=['POST'])
+def start_chapter_prerender(book_id, chapter_id):
+    import json
+    fmp4 = _chapter_render_fmp4(book_id, chapter_id)
+    meta_p = _chapter_render_meta(book_id, chapter_id)
+    if os.path.exists(fmp4) and os.path.exists(meta_p):
+        with open(meta_p) as f:
+            meta = json.load(f)
+        return jsonify({
+            'cached': True,
+            'audio_url': f'/api/chapter-audio/{book_id}/{chapter_id}',
+            'timeline': meta['timeline'],
+        })
+    job_id, _ = _make_export_job()
+    threading.Thread(target=_run_chapter_prerender, args=(job_id, book_id, chapter_id), daemon=True).start()
+    return jsonify({'job_id': job_id})
+
+
+@app.route('/api/chapter-audio/<int:book_id>/<int:chapter_id>')
+def serve_chapter_audio(book_id, chapter_id):
+    fmp4 = _chapter_render_fmp4(book_id, chapter_id)
+    if not os.path.exists(fmp4):
+        return '', 404
+    return send_file(fmp4, mimetype='audio/mp4')
 
 
 # ════════════════════════════════════════════════════════════════════════════

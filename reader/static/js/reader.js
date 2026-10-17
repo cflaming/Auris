@@ -29,6 +29,12 @@ let _segEnd    = {};     // segIdx -> chapter-timeline end   (seconds)
 let _mseNext   = 0;      // expected start time for the next segment to append
 let _mseGenId  = 0;      // incremented on teardown; stale appenders bail out
 
+// ── Full-chapter mode ─────────────────────────────────────────────────────────
+// When enabled, the whole chapter is pre-rendered to a single fMP4 and played
+// as one file.  iOS sees one track instead of one per segment.
+let _fullChapterMode  = localStorage.getItem('fullChapterMode') === '1';
+let _chapterAudioChId = null; // chapter ID whose audio is currently loaded in audio.src
+
 let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
@@ -440,6 +446,7 @@ function _teardownMSE() {
   audio.src = '';
   _segStart = {};
   _segEnd   = {};
+  _chapterAudioChId = null;
 }
 
 function _initMSE(startOffset = 0) {
@@ -579,6 +586,81 @@ async function _schedulePreload(playingIdx) {
   }
 }
 
+async function _playSegmentChapterMode(idx, gen) {
+  const charEl    = document.getElementById('pb-character');
+  const charLabel = segments[idx]?.character_name || 'Narrator';
+
+  if (_chapterAudioChId !== currentChapterId) {
+    // Need to render/load the full chapter audio
+    charEl.textContent = '⏳ Preparing…';
+    const chId = currentChapterId;
+
+    let resp, data;
+    try {
+      resp = await fetch(`/api/books/${BOOK_ID}/chapters/${chId}/prerender`, { method: 'POST' });
+      data = await resp.json();
+    } catch (e) {
+      if (gen !== _playGen) return;
+      charEl.textContent = 'Render request failed';
+      stopPlayback();
+      return;
+    }
+    if (gen !== _playGen || !isPlaying) return;
+    if (data.error) { charEl.textContent = data.error; stopPlayback(); return; }
+
+    let timeline, audioUrl;
+    if (data.audio_url) {
+      // Cached or instantly ready
+      timeline = data.timeline;
+      audioUrl = data.audio_url;
+    } else {
+      // Poll the export job
+      const jobId = data.job_id;
+      while (true) {
+        await new Promise(r => setTimeout(r, 900));
+        if (gen !== _playGen || !isPlaying) return;
+        let sr;
+        try { sr = await fetch(`/api/export/status/${jobId}`).then(r => r.json()); }
+        catch (_) { continue; }
+        if (gen !== _playGen || !isPlaying) return;
+        if (sr.state === 'complete') { timeline = sr.result.timeline; audioUrl = sr.result.audio_url; break; }
+        if (sr.state === 'failed')   { charEl.textContent = sr.error || 'Render failed'; stopPlayback(); return; }
+        charEl.textContent = `⏳ ${sr.done}/${sr.total}`;
+      }
+    }
+
+    if (gen !== _playGen || !isPlaying) return;
+
+    // Apply server timeline to _segStart/_segEnd/_segDurations
+    _segStart = {};
+    _segEnd   = {};
+    for (const { idx: i, t_start, t_end } of timeline) {
+      _segStart[i]    = t_start;
+      _segEnd[i]      = t_end;
+      _segDurations[i] = t_end - t_start;
+    }
+
+    audio.src = audioUrl;
+    audio.playbackRate = speedMultiplier;
+    _chapterAudioChId = currentChapterId;
+  }
+
+  // Seek to segment start if needed
+  const start = _segStart[idx] ?? 0;
+  const inRange = audio.currentTime >= start &&
+                  audio.currentTime < (_segEnd[idx] ?? start + 1);
+  if (!inRange) audio.currentTime = start;
+
+  charEl.textContent = charLabel;
+  const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
+  startWordHighlight(idx, dur);
+  audio.playbackRate = speedMultiplier;
+  if (audio.paused) await audio.play();
+  if (gen !== _playGen) return;
+
+  _updateMediaPosition(idx);
+}
+
 async function playSegment(idx) {
   if (idx >= segments.length) { stopPlayback(); return; }
 
@@ -590,6 +672,13 @@ async function playSegment(idx) {
   const charEl    = document.getElementById('pb-character');
   const seg       = segments[idx];
   const charLabel = seg.character_name || 'Narrator';
+
+  // ── Full-chapter mode (pre-rendered single file) ──────────────────────────
+  if (_fullChapterMode) {
+    try { await _playSegmentChapterMode(idx, gen); }
+    catch (e) { if (gen === _playGen) { document.getElementById('pb-character').textContent = e.message; stopPlayback(); } }
+    return;
+  }
 
   // ── MSE path ──────────────────────────────────────────────────────────────
   if (_mseOk) {
@@ -686,13 +775,13 @@ async function playSegment(idx) {
 function _onAudioEnded() {
   stopWordHighlight();
   if (!isPlaying) return;
-  if (_mseOk) {
-    // MSE: 'ended' fires when the whole chapter stream has been consumed
+  if (_mseOk || _fullChapterMode) {
+    // MSE or full-chapter: 'ended' means the whole chapter file finished
     queueProgressSave(currentChapterId, currentSegIdx);
     stopPlayback();
     return;
   }
-  // WAV fallback: advance segment-by-segment
+  // WAV segment-by-segment fallback: advance to next
   const next = currentSegIdx + 1;
   if (next < segments.length) playSegment(next);
   else {
@@ -729,8 +818,11 @@ function stopPlayback() {
     _audioA.src = '';
     _audioB.src = '';
     audio = _audioA;
-    _preloadIdx  = -1;
-    _preloadData = null;
+    _preloadIdx       = -1;
+    _preloadData      = null;
+    _chapterAudioChId = null;
+    _segStart         = {};
+    _segEnd           = {};
   }
   if (currentChapterId) queueProgressSave(currentChapterId, currentSegIdx);
   const btn = document.getElementById('btn-play');
@@ -756,14 +848,15 @@ function startWordHighlight(segIdx, durationSec) {
   if (!wordEls.length) return;
 
   const n        = wordEls.length;
-  // MSE: use the segment's absolute position in the chapter timeline
-  const segStart = _mseOk ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
+  // MSE or full-chapter: use the segment's absolute position in the chapter timeline
+  const _useTimeline = _mseOk || _fullChapterMode;
+  const segStart = _useTimeline ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
 
   function tick() {
     const t = audio.currentTime;
 
-    // MSE: detect natural transition to the next segment
-    if (_mseOk && isPlaying) {
+    // MSE or full-chapter: detect natural transition to the next segment
+    if (_useTimeline && isPlaying) {
       const nextStart = _segStart[segIdx + 1];
       if (nextStart !== undefined && t >= nextStart) {
         _onSegmentChange(segIdx + 1);
@@ -941,6 +1034,25 @@ document.getElementById('speed-slider').oninput = function() {
   audio.playbackRate = speedMultiplier;
   if (!_mseOk) _audioB.playbackRate = speedMultiplier;
 };
+
+(function initModeToggle() {
+  const btn = document.getElementById('mode-btn');
+  if (!btn) return;
+  function syncBtn() {
+    btn.textContent = _fullChapterMode ? 'Full' : 'Seg';
+    btn.classList.toggle('active', _fullChapterMode);
+  }
+  syncBtn();
+  btn.onclick = () => {
+    const wasPlaying = isPlaying;
+    const idx = currentSegIdx;
+    if (wasPlaying) stopPlayback();
+    _fullChapterMode = !_fullChapterMode;
+    localStorage.setItem('fullChapterMode', _fullChapterMode ? '1' : '0');
+    syncBtn();
+    if (wasPlaying) playSegment(idx);
+  };
+})();
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────
 
