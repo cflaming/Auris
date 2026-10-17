@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import threading
+import time
 import uuid
 
 from flask import (
@@ -777,7 +778,6 @@ def tts_generate():
             'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
             (result['audio_path'], result['duration_sec'], result['cache_key'], seg['id'])
         )
-
     return jsonify({
         'audio_url': f'/api/audio/{result["cache_key"]}',
         'duration_sec': result['duration_sec'],

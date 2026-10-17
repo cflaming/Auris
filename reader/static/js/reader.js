@@ -816,7 +816,10 @@ async function _advanceChapter() {
   }
 }
 
-function _onAudioEnded() {
+function _onAudioEnded(e) {
+  // Ignore events from the inactive element — stale _audioB src from WAV
+  // preloading can fire 'ended' while _audioA plays the full chapter file.
+  if (e && e.target !== audio) return;
   stopWordHighlight();
   if (!isPlaying) return;
   // 'ended' means the whole chapter is done only when:
@@ -1125,15 +1128,11 @@ document.getElementById('speed-slider').oninput = function() {
       try {
         await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/prerender`, { method: 'DELETE' });
       } catch (_) {}
-      // Reset client-side cache state so next play triggers a fresh prerender
-      _chapterAudioChId     = null;
-      _chapterPrerenderChId = null;
-      _segStart             = {};
-      _segEnd               = {};
-      reBtn.disabled = false;
       const wasPlaying = isPlaying;
       const idx = currentSegIdx;
-      if (wasPlaying) { stopPlayback(); playSegment(idx); }
+      stopPlayback(); // clears _chapterAudioChId, _chapterPrerenderChId, _segStart, _segEnd
+      reBtn.disabled = false;
+      if (wasPlaying) playSegment(idx);
     };
   }
 })();
