@@ -577,7 +577,7 @@ async function _appendAhead(fromIdx, genId) {
 
 function _onSegmentChange(idx) {
   if (idx >= segments.length) return;
-  setCurrentSegment(idx, { highlight: true, save: true });
+  setCurrentSegment(idx, { highlight: true, save: false });
   const seg = segments[idx];
   document.getElementById('pb-character').textContent = seg.character_name || 'Narrator';
   updatePlaybackUI();
@@ -720,7 +720,7 @@ async function playSegment(idx) {
   isPlaying = true;
   _sleepTimerFired = false; // explicit play clears fired state so auto-advance works again
   updateMediaSession(true);
-  setCurrentSegment(idx, { highlight: true, save: true });
+  setCurrentSegment(idx, { highlight: true, save: false });
 
   const charEl    = document.getElementById('pb-character');
   const seg       = segments[idx];
@@ -957,9 +957,11 @@ function stopPlayback() {
 // ── Word-level highlighting ───────────────────────────────────────────────────
 
 let _wordRafId = null;
+let _progressInterval = null;
 
 function startWordHighlight(segIdx, durationSec) {
   stopWordHighlight();
+  _progressInterval = setInterval(() => queueProgressSave(), 30_000);
   // MSE or full-chapter: use the segment's absolute position in the chapter timeline
   const _useTimeline = _mseOk || _fullChapterMode;
   // In timeline mode keep the RAF running even with no duration — we still need
@@ -1010,6 +1012,7 @@ function startWordHighlight(segIdx, durationSec) {
 
 function stopWordHighlight() {
   if (_wordRafId) { cancelAnimationFrame(_wordRafId); _wordRafId = null; }
+  if (_progressInterval) { clearInterval(_progressInterval); _progressInterval = null; }
   document.querySelectorAll('.word.playing').forEach(el => el.classList.remove('playing'));
 }
 
