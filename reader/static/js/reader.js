@@ -644,6 +644,7 @@ async function _playSegmentChapterMode(idx, gen) {
     audio.src = audioUrl;
     audio.playbackRate = speedMultiplier;
     _chapterAudioChId = currentChapterId;
+    _preloadNextChapter();
   }
 
   // Seek to segment start if needed
@@ -773,21 +774,39 @@ async function playSegment(idx) {
   }
 }
 
+function _preloadNextChapter() {
+  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  if (idx < 0 || idx >= chapters.length - 1) return;
+  const nextChId = chapters[idx + 1].id;
+  fetch(`/api/books/${BOOK_ID}/chapters/${nextChId}/prerender`, { method: 'POST' })
+    .catch(() => {});
+}
+
+async function _advanceChapter() {
+  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  if (idx >= 0 && idx < chapters.length - 1) {
+    await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
+    playSegment(0);
+  } else {
+    stopPlayback();
+  }
+}
+
 function _onAudioEnded() {
   stopWordHighlight();
   if (!isPlaying) return;
   if (_mseOk || _fullChapterMode) {
     // MSE or full-chapter: 'ended' means the whole chapter file finished
     queueProgressSave(currentChapterId, currentSegIdx);
-    stopPlayback();
+    _advanceChapter();
     return;
   }
-  // WAV segment-by-segment fallback: advance to next
+  // WAV segment-by-segment fallback: advance segment, or chapter when done
   const next = currentSegIdx + 1;
   if (next < segments.length) playSegment(next);
   else {
     queueProgressSave(currentChapterId, currentSegIdx);
-    stopPlayback();
+    _advanceChapter();
   }
 }
 
