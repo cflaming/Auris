@@ -587,13 +587,14 @@ async function _schedulePreload(playingIdx) {
   }
 }
 
+// Returns true if chapter audio was ready and playback was started.
+// Returns false if the render is still in progress — caller falls back to
+// segment mode while the prerender continues in the background.
 async function _playSegmentChapterMode(idx, gen) {
   const charEl    = document.getElementById('pb-character');
   const charLabel = segments[idx]?.character_name || 'Narrator';
 
   if (_chapterAudioChId !== currentChapterId) {
-    // Need to render/load the full chapter audio
-    charEl.textContent = '⏳ Preparing…';
     const chId = currentChapterId;
 
     let resp, data;
@@ -601,47 +602,27 @@ async function _playSegmentChapterMode(idx, gen) {
       resp = await fetch(`/api/books/${BOOK_ID}/chapters/${chId}/prerender`, { method: 'POST' });
       data = await resp.json();
     } catch (e) {
-      if (gen !== _playGen) return;
-      charEl.textContent = 'Render request failed';
-      stopPlayback();
-      return;
+      return false; // network error — fall back to segments
     }
-    if (gen !== _playGen || !isPlaying) return;
-    if (data.error) { charEl.textContent = data.error; stopPlayback(); return; }
+    if (gen !== _playGen || !isPlaying) return true;
+    if (data.error) { charEl.textContent = data.error; stopPlayback(); return true; }
 
-    let timeline, audioUrl;
-    if (data.audio_url) {
-      // Cached or instantly ready
-      timeline = data.timeline;
-      audioUrl = data.audio_url;
-    } else {
-      // Poll the export job
-      const jobId = data.job_id;
-      while (true) {
-        await new Promise(r => setTimeout(r, 900));
-        if (gen !== _playGen || !isPlaying) return;
-        let sr;
-        try { sr = await fetch(`/api/export/status/${jobId}`).then(r => r.json()); }
-        catch (_) { continue; }
-        if (gen !== _playGen || !isPlaying) return;
-        if (sr.state === 'complete') { timeline = sr.result.timeline; audioUrl = sr.result.audio_url; break; }
-        if (sr.state === 'failed')   { charEl.textContent = sr.error || 'Render failed'; stopPlayback(); return; }
-        charEl.textContent = `⏳ ${sr.done}/${sr.total}`;
-      }
+    if (!data.audio_url) {
+      // Render just kicked off — play via segments now, cache will be ready next time
+      return false;
     }
 
-    if (gen !== _playGen || !isPlaying) return;
-
-    // Apply server timeline to _segStart/_segEnd/_segDurations
+    // Already cached — use full chapter audio
+    if (gen !== _playGen || !isPlaying) return true;
     _segStart = {};
     _segEnd   = {};
-    for (const { idx: i, t_start, t_end } of timeline) {
-      _segStart[i]    = t_start;
-      _segEnd[i]      = t_end;
+    for (const { idx: i, t_start, t_end } of data.timeline) {
+      _segStart[i]     = t_start;
+      _segEnd[i]       = t_end;
       _segDurations[i] = t_end - t_start;
     }
 
-    audio.src = audioUrl;
+    audio.src = data.audio_url;
     audio.playbackRate = speedMultiplier;
     _chapterAudioChId = currentChapterId;
     _preloadNextChapter();
@@ -658,9 +639,10 @@ async function _playSegmentChapterMode(idx, gen) {
   startWordHighlight(idx, dur);
   audio.playbackRate = speedMultiplier;
   if (audio.paused) await audio.play();
-  if (gen !== _playGen) return;
+  if (gen !== _playGen) return true;
 
   _updateMediaPosition(idx);
+  return true;
 }
 
 async function playSegment(idx) {
@@ -676,10 +658,13 @@ async function playSegment(idx) {
   const charLabel = seg.character_name || 'Narrator';
 
   // ── Full-chapter mode (pre-rendered single file) ──────────────────────────
+  // Falls through to segment mode if the render isn't cached yet.
   if (_fullChapterMode) {
-    try { await _playSegmentChapterMode(idx, gen); }
-    catch (e) { if (gen === _playGen) { document.getElementById('pb-character').textContent = e.message; stopPlayback(); } }
-    return;
+    let handled = false;
+    try { handled = await _playSegmentChapterMode(idx, gen); }
+    catch (e) { if (gen === _playGen) { charEl.textContent = e.message; stopPlayback(); } return; }
+    if (handled) return;
+    // Not cached yet — continue below to play via segments while it generates
   }
 
   // ── MSE path ──────────────────────────────────────────────────────────────
