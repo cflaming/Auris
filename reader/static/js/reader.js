@@ -243,6 +243,8 @@ async function openChapter(chapterId, options = {}) {
   document.querySelectorAll('.toc-item').forEach(el => {
     el.classList.toggle('active', +el.dataset.id === chapterId);
   });
+  document.querySelector('.toc-item.active')
+    ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   const ch = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
   document.getElementById('chapter-title').textContent = ch.title;
