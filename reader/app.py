@@ -801,6 +801,42 @@ def tts_load():
     return jsonify({'ok': True})
 
 
+_SILENCE_CACHE_KEY = 'a' * 32  # fixed key — all section breaks share one silence file
+_SILENCE_DURATION  = 1.5       # seconds
+_SILENCE_SAMPLE_RATE = 24_000  # match TTS engine output rate
+
+
+def _section_break_silence(seg, book_id, chapter_id, segment_index):
+    from core.tts_engine import AUDIO_CACHE_DIR
+    wav_path = os.path.join(AUDIO_CACHE_DIR, f'{_SILENCE_CACHE_KEY}.wav')
+    if not os.path.exists(wav_path):
+        import io, wave
+        n = int(_SILENCE_DURATION * _SILENCE_SAMPLE_RATE)
+        buf = io.BytesIO()
+        with wave.open(buf, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(_SILENCE_SAMPLE_RATE)
+            wf.writeframes(b'\x00\x00' * n)
+        with open(wav_path, 'wb') as f:
+            f.write(buf.getvalue())
+    if seg.get('cache_key') != _SILENCE_CACHE_KEY:
+        with get_conn() as conn:
+            conn.execute(
+                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
+                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, seg['id'])
+            )
+    return jsonify({
+        'audio_url': f'/api/audio/{_SILENCE_CACHE_KEY}',
+        'duration_sec': _SILENCE_DURATION,
+        'text': '',
+        'character_name': None,
+        'is_dialogue': False,
+        'segment_index': segment_index,
+        'cached': seg.get('cache_key') == _SILENCE_CACHE_KEY,
+    })
+
+
 @app.route('/api/tts/generate', methods=['POST'])
 def tts_generate():
     body = request.get_json(force=True) or {}
@@ -840,6 +876,11 @@ def tts_generate():
         return jsonify({'error': 'Segment index out of range'}), 404
 
     seg = dict(seg)
+
+    # Section break: serve a short silence rather than running TTS on the ellipsis text.
+    if not seg.get('text'):
+        return _section_break_silence(seg, book_id, chapter_id, segment_index)
+
     if seg.get('audio_path') and os.path.exists(seg['audio_path']):
         rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
         _tts_finish(rid, cached=True, duration_sec=seg['duration_sec'])

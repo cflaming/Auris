@@ -902,11 +902,13 @@ function startWordHighlight(segIdx, durationSec) {
   if (!durationSec) return;
 
   const wordEls = document.querySelectorAll(`.word[data-seg="${segIdx}"]`);
-  if (!wordEls.length) return;
-
-  const n        = wordEls.length;
   // MSE or full-chapter: use the segment's absolute position in the chapter timeline
   const _useTimeline = _mseOk || _fullChapterMode;
+  // Keep the RAF loop running in timeline mode even with no word spans
+  // (section-break segments have no .word elements but still need advancement).
+  if (!wordEls.length && !_useTimeline) return;
+
+  const n        = wordEls.length;
   const segStart = _useTimeline ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
 
   function tick() {
