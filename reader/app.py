@@ -816,6 +816,37 @@ def serve_audio(cache_key):
     return send_file(path, mimetype='audio/wav')
 
 
+@app.route('/api/audio/<cache_key>/fmp4')
+def serve_audio_fmp4(cache_key):
+    """WAV converted to fragmented MP4 (AAC) for MediaSource Extensions streaming."""
+    if not _CACHE_KEY_RE.match(cache_key):
+        return '', 404
+    from core.tts_engine import AUDIO_CACHE_DIR
+    from core.exporter import _ffmpeg_available
+    wav_path = os.path.join(AUDIO_CACHE_DIR, f'{cache_key}.wav')
+    if not os.path.exists(wav_path):
+        return '', 404
+    fmp4_path = os.path.join(AUDIO_CACHE_DIR, f'{cache_key}.fmp4')
+    if not os.path.exists(fmp4_path):
+        if not _ffmpeg_available():
+            return jsonify({'error': 'ffmpeg not available'}), 503
+        import subprocess
+        try:
+            subprocess.run(
+                [
+                    'ffmpeg', '-i', wav_path,
+                    '-c:a', 'aac', '-b:a', '128k', '-ac', '1',
+                    '-f', 'mp4',
+                    '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+                    '-y', fmp4_path,
+                ],
+                check=True, capture_output=True,
+            )
+        except subprocess.CalledProcessError:
+            return '', 500
+    return send_file(fmp4_path, mimetype='audio/mp4')
+
+
 # ════════════════════════════════════════════════════════════════════════════
 # Export API
 # ════════════════════════════════════════════════════════════════════════════

@@ -15,6 +15,20 @@ let currentTheme    = localStorage.getItem('theme') || 'night';
 let showVoices      = localStorage.getItem('showVoices') !== '0';
 let charColors      = {};   // character name -> #RRGGBB
 let _segDurations   = {};   // segIdx -> duration_sec (accumulated as segments play)
+
+// ── MSE (MediaSource Extensions) — primary audio path ────────────────────────
+// Falls back to WAV-per-segment if browser lacks MSE for AAC MP4.
+const MSE_MIME = 'audio/mp4; codecs="mp4a.40.2"';
+const _mseOk   = typeof MediaSource !== 'undefined' && MediaSource.isTypeSupported(MSE_MIME);
+let _ms        = null;   // MediaSource
+let _sb        = null;   // SourceBuffer
+let _sbReady   = false;  // SourceBuffer ready to accept appends
+let _sbQ       = [];     // pending append queue [{buf, res, rej}]
+let _segStart  = {};     // segIdx -> chapter-timeline start (seconds)
+let _segEnd    = {};     // segIdx -> chapter-timeline end   (seconds)
+let _mseNext   = 0;      // expected start time for the next segment to append
+let _mseGenId  = 0;      // incremented on teardown; stale appenders bail out
+
 let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
@@ -245,6 +259,8 @@ async function openChapter(chapterId, options = {}) {
     fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
   ]);
   segments = segs;
+  // Pre-populate durations from API data so resume-offset calculation is accurate
+  segs.forEach((s, i) => { if (s.duration_sec) _segDurations[i] = s.duration_sec; });
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
   renderContent(segments);
   _prewarmChapter();
@@ -409,6 +425,132 @@ function fetchSegmentData(idx) {
   return _segCache.get(idx);
 }
 
+// ── MSE helpers ───────────────────────────────────────────────────────────────
+
+function _teardownMSE() {
+  _sbReady = false;
+  _mseNext = 0;
+  for (const { rej } of _sbQ) rej(new Error('MSE closed'));
+  _sbQ = [];
+  _sb = null;
+  if (_ms) {
+    if (_ms.readyState === 'open') try { _ms.endOfStream(); } catch (_) {}
+    _ms = null;
+  }
+  audio.src = '';
+  _segStart = {};
+  _segEnd   = {};
+}
+
+function _initMSE(startOffset = 0) {
+  _teardownMSE();
+  ++_mseGenId;
+  const myId = _mseGenId;
+  return new Promise(resolve => {
+    _ms = new MediaSource();
+    const url = URL.createObjectURL(_ms);
+    audio.src = url;
+    _ms.addEventListener('sourceopen', () => {
+      URL.revokeObjectURL(url);
+      if (_mseGenId !== myId) return; // was torn down before open fired
+      _sb = _ms.addSourceBuffer(MSE_MIME);
+      _sb.mode = 'sequence';
+      _sb.timestampOffset = startOffset;
+      _mseNext = startOffset;
+      _sbReady = true;
+      resolve();
+    }, { once: true });
+  });
+}
+
+function _drainSbQ() {
+  if (!_sbReady || !_sb || _sb.updating || !_sbQ.length) return;
+  const { buf, res, rej } = _sbQ.shift();
+  const onEnd = () => { res(); _drainSbQ(); };
+  const onErr = e  => { rej(e); _drainSbQ(); };
+  _sb.addEventListener('updateend', onEnd, { once: true });
+  _sb.addEventListener('error',    onErr, { once: true });
+  try {
+    _sb.appendBuffer(buf);
+  } catch (e) {
+    _sb.removeEventListener('updateend', onEnd);
+    _sb.removeEventListener('error',    onErr);
+    rej(e);
+    _drainSbQ();
+  }
+}
+
+function _sbAppend(buf) {
+  return new Promise((res, rej) => {
+    _sbQ.push({ buf, res, rej });
+    _drainSbQ();
+  });
+}
+
+function _isInBuffer(time) {
+  if (!_sb) return false;
+  for (let i = 0; i < _sb.buffered.length; i++) {
+    if (time >= _sb.buffered.start(i) - 0.1 && time <= _sb.buffered.end(i) + 0.1) return true;
+  }
+  return false;
+}
+
+async function _fetchAndAppendSeg(idx, genId) {
+  if (_mseGenId !== genId || !_sbReady) return false;
+  let data;
+  try { data = await fetchSegmentData(idx); }
+  catch (_) { return false; }
+  if (_mseGenId !== genId || !_sbReady) return false;
+
+  let resp;
+  try { resp = await fetch(`${data.audio_url}/fmp4`); }
+  catch (_) { return false; }
+  if (!resp.ok || _mseGenId !== genId || !_sbReady) return false;
+
+  let buf;
+  try { buf = await resp.arrayBuffer(); }
+  catch (_) { return false; }
+  if (_mseGenId !== genId || !_sbReady) return false;
+
+  _segStart[idx] = _mseNext;
+  _segDurations[idx] = data.duration_sec;
+
+  try { await _sbAppend(buf); }
+  catch (_) { return false; }
+
+  const actualEnd = _sb?.buffered.length > 0
+    ? _sb.buffered.end(_sb.buffered.length - 1)
+    : (_mseNext + (data.duration_sec || 0));
+  _segEnd[idx]  = actualEnd;
+  _mseNext      = actualEnd;
+
+  // Finalize stream after last segment
+  if (idx === segments.length - 1 && _ms?.readyState === 'open') {
+    try { _ms.endOfStream(); } catch (_) {}
+  }
+  return true;
+}
+
+async function _appendAhead(fromIdx, genId) {
+  for (let i = fromIdx; i < Math.min(fromIdx + 3, segments.length); i++) {
+    if (_mseGenId !== genId) return;
+    if (_segStart[i] !== undefined) continue;
+    await _fetchAndAppendSeg(i, genId);
+  }
+}
+
+function _onSegmentChange(idx) {
+  if (idx >= segments.length) return;
+  setCurrentSegment(idx, { highlight: true, save: true });
+  const seg = segments[idx];
+  document.getElementById('pb-character').textContent = seg.character_name || 'Narrator';
+  updatePlaybackUI();
+  _updateMediaPosition(idx);
+  const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
+  startWordHighlight(idx, dur);
+  _appendAhead(idx + 1, _mseGenId);
+}
+
 async function _schedulePreload(playingIdx) {
   if (!isPlaying) return;
   const nextIdx = playingIdx + 1;
@@ -441,45 +583,101 @@ async function playSegment(idx) {
   if (idx >= segments.length) { stopPlayback(); return; }
 
   const gen = ++_playGen;
-
   isPlaying = true;
-  updateMediaSession(true);   // signal playing immediately, before any async gap
+  updateMediaSession(true);
   setCurrentSegment(idx, { highlight: true, save: true });
 
-  const seg = segments[idx];
-  const charEl = document.getElementById('pb-character');
+  const charEl    = document.getElementById('pb-character');
+  const seg       = segments[idx];
   const charLabel = seg.character_name || 'Narrator';
-  charEl.textContent = charLabel;
 
+  // ── MSE path ──────────────────────────────────────────────────────────────
+  if (_mseOk) {
+    try {
+      // (Re-)init MSE if needed
+      let needInit = !_sbReady;
+      let initOffset = 0;
+      if (!_sbReady) {
+        for (let i = 0; i < idx; i++) {
+          initOffset += segments[i]?.duration_sec ?? _segDurations[i] ?? 0;
+        }
+      } else if (_segStart[idx] !== undefined && !_isInBuffer(_segStart[idx])) {
+        // Segment position known but evicted from buffer — restart from there
+        needInit   = true;
+        initOffset = _segStart[idx];
+      }
+
+      if (needInit) {
+        await _initMSE(initOffset);
+        if (gen !== _playGen || !isPlaying) return;
+      }
+
+      const genId = _mseGenId;
+
+      // Append up to idx if not yet in buffer
+      if (_segStart[idx] === undefined) {
+        charEl.textContent = `⏳ ${charLabel}`;
+        const last = Object.keys(_segStart).length
+          ? Math.max(...Object.keys(_segStart).map(Number))
+          : -1;
+        for (let i = last + 1; i <= idx; i++) {
+          if (gen !== _playGen || !isPlaying) return;
+          if (!await _fetchAndAppendSeg(i, genId)) { stopPlayback(); return; }
+        }
+      }
+
+      if (gen !== _playGen || !isPlaying) return;
+
+      // Seek to segment start unless already paused inside it
+      const start = _segStart[idx];
+      if (start !== undefined) {
+        const inRange = audio.currentTime >= start &&
+                        audio.currentTime <  (_segEnd[idx] ?? start + 1);
+        if (!inRange) audio.currentTime = start;
+      }
+
+      charEl.textContent = charLabel;
+      const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
+      startWordHighlight(idx, dur);
+      audio.playbackRate = speedMultiplier;
+      if (audio.paused) await audio.play();
+      if (gen !== _playGen) return;
+
+      _updateMediaPosition(idx);
+      _appendAhead(idx + 1, genId);
+
+    } catch(e) {
+      if (gen !== _playGen) return;
+      charEl.textContent = e.message;
+      stopPlayback();
+    }
+    return;
+  }
+
+  // ── WAV fallback (original dual-buffer path) ──────────────────────────────
+  charEl.textContent = charLabel;
   try {
     let data;
-
     if (_preloadIdx === idx && _preloadData) {
-      // Standby element already buffered — swap and play instantly
       _swapAudio();
-      data = _preloadData;
-      _preloadIdx = -1;
+      data      = _preloadData;
+      _preloadIdx  = -1;
       _preloadData = null;
     } else {
-      // Show buffering indicator while TTS generates
       charEl.textContent = `⏳ ${charLabel}`;
       data = await fetchSegmentData(idx);
-      // Bail out if a newer playSegment or stopPlayback has since taken over
       if (gen !== _playGen || !isPlaying) return;
       charEl.textContent = charLabel;
       audio.src = data.audio_url;
     }
-
     _segDurations[idx] = data.duration_sec;
     audio.playbackRate = speedMultiplier;
     startWordHighlight(idx, data.duration_sec);
     await audio.play();
     _updateMediaPosition(idx);
-
     _schedulePreload(idx);
-
   } catch(e) {
-    if (gen !== _playGen) return;   // stale — a newer segment took over
+    if (gen !== _playGen) return;
     charEl.textContent = e.message;
     stopPlayback();
   }
@@ -488,6 +686,13 @@ async function playSegment(idx) {
 function _onAudioEnded() {
   stopWordHighlight();
   if (!isPlaying) return;
+  if (_mseOk) {
+    // MSE: 'ended' fires when the whole chapter stream has been consumed
+    queueProgressSave(currentChapterId, currentSegIdx);
+    stopPlayback();
+    return;
+  }
+  // WAV fallback: advance segment-by-segment
   const next = currentSegIdx + 1;
   if (next < segments.length) playSegment(next);
   else {
@@ -514,15 +719,19 @@ _audioB.addEventListener('error', _onAudioError);
 
 function stopPlayback() {
   isPlaying = false;
-  _playGen++;            // invalidate any in-flight playSegment coroutine
+  _playGen++;
   stopWordHighlight();
-  _audioA.pause();
-  _audioB.pause();
-  _audioA.src = '';
-  _audioB.src = '';
-  audio = _audioA; // reset active to primary
-  _preloadIdx = -1;
-  _preloadData = null;
+  if (_mseOk) {
+    _teardownMSE();
+  } else {
+    _audioA.pause();
+    _audioB.pause();
+    _audioA.src = '';
+    _audioB.src = '';
+    audio = _audioA;
+    _preloadIdx  = -1;
+    _preloadData = null;
+  }
   if (currentChapterId) queueProgressSave(currentChapterId, currentSegIdx);
   const btn = document.getElementById('btn-play');
   btn.innerHTML = '&#9654;';
@@ -546,12 +755,24 @@ function startWordHighlight(segIdx, durationSec) {
   const wordEls = document.querySelectorAll(`.word[data-seg="${segIdx}"]`);
   if (!wordEls.length) return;
 
-  const n      = wordEls.length;
-  const start  = audio.currentTime;
+  const n        = wordEls.length;
+  // MSE: use the segment's absolute position in the chapter timeline
+  const segStart = _mseOk ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
 
   function tick() {
-    const elapsed   = (audio.currentTime - start) * speedMultiplier;
-    const wordIdx   = Math.min(Math.floor((elapsed / durationSec) * n), n - 1);
+    const t = audio.currentTime;
+
+    // MSE: detect natural transition to the next segment
+    if (_mseOk && isPlaying) {
+      const nextStart = _segStart[segIdx + 1];
+      if (nextStart !== undefined && t >= nextStart) {
+        _onSegmentChange(segIdx + 1);
+        return; // _onSegmentChange starts a new rAF loop
+      }
+    }
+
+    const elapsed = (t - segStart) * speedMultiplier;
+    const wordIdx = Math.min(Math.floor((elapsed / durationSec) * n), n - 1);
     wordEls.forEach((el, i) => el.classList.toggle('playing', i === wordIdx));
     if (isPlaying && !audio.paused) _wordRafId = requestAnimationFrame(tick);
   }
@@ -717,8 +938,8 @@ document.getElementById('pb-seek-bar').onclick = (e) => {
 document.getElementById('speed-slider').oninput = function() {
   speedMultiplier = parseFloat(this.value);
   document.getElementById('speed-val').textContent = speedMultiplier.toFixed(1) + '×';
-  _audioA.playbackRate = speedMultiplier;
-  _audioB.playbackRate = speedMultiplier;
+  audio.playbackRate = speedMultiplier;
+  if (!_mseOk) _audioB.playbackRate = speedMultiplier;
 };
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────
@@ -1002,9 +1223,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 // iOS Safari blocks audio.play() called after an async gap from a gesture.
-// Unlock both audio elements on first touch so subsequent async plays work.
+// Touch this element in a user-gesture context so iOS grants page-level audio permission.
 document.addEventListener('touchstart', function _unlockAudio() {
-  [_audioA, _audioB].forEach(a => {
+  const els = _mseOk ? [_audioA] : [_audioA, _audioB];
+  els.forEach(a => {
     a.muted = true;
     a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = false; }).catch(() => { a.muted = false; });
   });
