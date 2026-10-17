@@ -388,6 +388,151 @@ class TTSEngine:
             )
         return ref_path, VOICE_DESIGN_REF_TEXT
 
+    def _synthesize_audio_batch(
+        self,
+        texts: list[str],
+        instructs: list[str | None],
+        ref_audios: list[str | None],
+        ref_texts: list[str | None],
+        speeds: list[float],
+        num_step: int = 32,
+    ) -> list[np.ndarray]:
+        """Batch synthesize under one GPU call. Acquires self._lock for the full batch.
+
+        All items in the batch must share the same mode: either all have ref_audio
+        (clone mode) or all have ref_audio=None (instruct/auto mode).
+        """
+        with self._lock:
+            if not self._ready or self.model is None:
+                raise RuntimeError("Model is not loaded yet. " + (self._error or "Call load_async() first."))
+            vcp_list = (
+                [self._get_voice_clone_prompt(r, rt) for r, rt in zip(ref_audios, ref_texts)]
+                if any(r is not None for r in ref_audios)
+                else None
+            )
+            audio_arrays = self.model.generate(
+                text=texts,
+                instruct=instructs if any(i is not None for i in instructs) else None,
+                voice_clone_prompt=vcp_list,
+                speed=speeds if any(s != 1.0 for s in speeds) else None,
+                num_step=num_step,
+            )
+
+        result = []
+        for audio in audio_arrays:
+            if not isinstance(audio, np.ndarray):
+                audio = np.array(audio)
+            if audio.ndim > 1:
+                audio = audio.mean(axis=0)
+            result.append(audio)
+        return result
+
+    def generate_batch(
+        self,
+        items: list[dict],
+        batch_duration: float = 60.0,
+        num_step: int = 32,
+    ) -> list[dict | None]:
+        """Generate audio for multiple items using cache and true GPU batching.
+
+        Each item: {text, instruct?, ref_audio?, speed?}.
+        Returns results in the same order as items.  Failed items get None.
+        """
+        from omnivoice.utils.duration import RuleDurationEstimator
+        dur_est = RuleDurationEstimator()
+
+        results: list[dict | None] = [None] * len(items)
+        uncached: list[tuple] = []
+
+        # Phase 1: voice design stabilization + cache check.
+        # _ensure_voice_design_reference calls _synthesize_audio which acquires
+        # self._lock, so we must do this before any code that also holds the lock.
+        for i, item in enumerate(items):
+            text = item["text"]
+            instruct = item.get("instruct")
+            ref_audio = item.get("ref_audio")
+            speed = float(item.get("speed") or 1.0)
+
+            eff_instruct = _stabilize_voice_design_instruct(instruct)
+            eff_ref_audio, eff_ref_text = ref_audio, None
+            if self._needs_voice_design_stabilization(text, eff_instruct, ref_audio):
+                eff_ref_audio, eff_ref_text = self._ensure_voice_design_reference(eff_instruct)
+
+            key = self.cache_key(text, eff_instruct, eff_ref_audio, speed, ref_text=eff_ref_text)
+            path = self.cache_path(key)
+            if os.path.exists(path):
+                data, sr = sf.read(path)
+                results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
+                               "cache_hit": True, "cache_key": key, "generation_sec": 0.0}
+            else:
+                uncached.append((i, text, eff_instruct, eff_ref_audio, eff_ref_text, speed, key, path))
+
+        if not uncached:
+            return results
+
+        # Phase 2: estimate total (ref + generated) duration per item for batch sizing.
+        def _est_total(text, ref_text, ref_audio):
+            ref_dur = 0.0
+            if ref_audio:
+                try:
+                    info = sf.info(ref_audio)
+                    ref_dur = info.frames / info.samplerate
+                except Exception:
+                    pass
+            gen_dur = dur_est.estimate_duration(
+                text, ref_text or "Nice to meet you.", max(ref_dur, 0.5), low_threshold=2.0
+            )
+            return ref_dur + gen_dur
+
+        # Phase 3: split clone (has ref_audio) vs other (no ref_audio) so that each
+        # batch passed to the model is homogeneous — mixing modes crashes the model.
+        clone = [u for u in uncached if u[3] is not None]
+        other = [u for u in uncached if u[3] is None]
+
+        def _cluster(group):
+            with_dur = [(u, _est_total(u[1], u[4], u[3])) for u in group]
+            with_dur.sort(key=lambda x: x[1], reverse=True)
+            batches, cur, cur_dur = [], [], 0.0
+            for u, dur in with_dur:
+                if cur and cur_dur + dur > batch_duration:
+                    batches.append(cur)
+                    cur, cur_dur = [], 0.0
+                cur.append(u)
+                cur_dur += dur
+            if cur:
+                batches.append(cur)
+            return batches
+
+        # Phase 4: one GPU call per sub-batch, save files.
+        for group in (clone, other):
+            for batch in _cluster(group):
+                t0 = time.time()
+                try:
+                    audios = self._synthesize_audio_batch(
+                        texts=[u[1] for u in batch],
+                        instructs=[u[2] for u in batch],
+                        ref_audios=[u[3] for u in batch],
+                        ref_texts=[u[4] for u in batch],
+                        speeds=[u[5] for u in batch],
+                        num_step=num_step,
+                    )
+                except Exception as exc:
+                    log.warning("Batch synthesis failed (%d items): %s", len(batch), exc)
+                    continue
+                gen_per_item = round((time.time() - t0) / len(batch), 2)
+                for u, audio in zip(batch, audios):
+                    orig_idx, _, _, _, _, _, key, path = u
+                    sf.write(path, audio, SAMPLE_RATE)
+                    results[orig_idx] = {
+                        "audio_path": path,
+                        "duration_sec": len(audio) / SAMPLE_RATE,
+                        "cache_hit": False,
+                        "cache_key": key,
+                        "generation_sec": gen_per_item,
+                    }
+
+        return results
+
     def generate(
         self,
         text: str,

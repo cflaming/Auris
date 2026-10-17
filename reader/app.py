@@ -1157,33 +1157,41 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
             ).fetchall()
         }
     narrator_ref = _book_narrator_ref_audio(book_id)
+
+    def _ref_for(seg):
+        char = chars.get(seg['character_name']) if seg['character_name'] else None
+        return (char['ref_audio_path'] if char and char.get('ref_audio_path') else None) if char else narrator_ref
+
+    items, pending_segs = [], []
     for seg in segs:
         if seg.get('audio_path') and os.path.exists(seg['audio_path']):
             if job is not None:
                 job['done'] = job.get('done', 0) + 1
             continue
-        char = chars.get(seg['character_name']) if seg['character_name'] else None
-        if char:
-            ref_audio = char['ref_audio_path'] if char.get('ref_audio_path') else None
+        items.append({'text': seg['enriched_text'], 'instruct': seg['instruct'],
+                      'ref_audio': _ref_for(seg), 'speed': seg['speed']})
+        pending_segs.append(seg)
+
+    if not pending_segs:
+        return
+
+    results = tts.generate_batch(items)
+
+    for seg, result in zip(pending_segs, results):
+        if result is None:
+            log.warning('Audio generation failed for segment %s', seg.get('id'))
         else:
-            ref_audio = narrator_ref
-        try:
-            result = tts.generate(
-                text=seg['enriched_text'],
-                instruct=seg['instruct'],
-                ref_audio=ref_audio,
-                speed=seg['speed'],
-            )
-            with get_conn() as conn:
-                conn.execute(
-                    'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
-                    (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], seg['id'])
-                )
-            seg['audio_path'] = result['audio_path']
-            seg['duration_sec'] = result['duration_sec']
-            seg['cache_key'] = result['cache_key']
-        except Exception as e:
-            log.warning('Audio generation failed for segment %s: %s', seg.get('id'), e)
+            try:
+                with get_conn() as conn:
+                    conn.execute(
+                        'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
+                        (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], seg['id'])
+                    )
+                seg['audio_path'] = result['audio_path']
+                seg['duration_sec'] = result['duration_sec']
+                seg['cache_key'] = result['cache_key']
+            except Exception as e:
+                log.warning('Failed to save audio for segment %s: %s', seg.get('id'), e)
         if job is not None:
             job['done'] = job.get('done', 0) + 1
 
