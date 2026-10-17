@@ -32,8 +32,9 @@ let _mseGenId  = 0;      // incremented on teardown; stale appenders bail out
 // ── Full-chapter mode ─────────────────────────────────────────────────────────
 // When enabled, the whole chapter is pre-rendered to a single fMP4 and played
 // as one file.  iOS sees one track instead of one per segment.
-let _fullChapterMode  = localStorage.getItem('fullChapterMode') === '1';
-let _chapterAudioChId = null; // chapter ID whose audio is currently loaded in audio.src
+let _fullChapterMode     = localStorage.getItem('fullChapterMode') === '1';
+let _chapterAudioChId    = null; // chapter ID whose audio is currently loaded in audio.src
+let _chapterPrerenderChId = null; // chapter ID for which a prerender POST has been sent
 
 let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
@@ -449,7 +450,8 @@ function _teardownMSE() {
   audio.src = '';
   _segStart = {};
   _segEnd   = {};
-  _chapterAudioChId = null;
+  _chapterAudioChId    = null;
+  _chapterPrerenderChId = null;
 }
 
 function _initMSE(startOffset = 0) {
@@ -599,6 +601,12 @@ async function _playSegmentChapterMode(idx, gen) {
   if (_chapterAudioChId !== currentChapterId) {
     const chId = currentChapterId;
 
+    // Only POST once per chapter — avoid spawning a new GPU job on every segment
+    // while falling back to WAV during the prerender.
+    if (_chapterPrerenderChId === chId) {
+      return false; // render already in progress, keep playing via segments
+    }
+
     let resp, data;
     try {
       resp = await fetch(`/api/books/${BOOK_ID}/chapters/${chId}/prerender`, { method: 'POST' });
@@ -611,10 +619,20 @@ async function _playSegmentChapterMode(idx, gen) {
 
     if (!data.audio_url) {
       // Render just kicked off — play via segments now, cache will be ready next time
+      _chapterPrerenderChId = chId; // mark so subsequent segments don't re-POST
       return false;
     }
 
-    // Already cached — use full chapter audio
+    // Already cached — but reject if the prerender is incomplete (some
+    // segments failed TTS generation and are missing from the timeline).
+    // Incomplete cache plays a truncated chapter and stalls the highlight.
+    // Fall back to WAV segments and let the user ↺ regenerate.
+    if (data.total_segments !== undefined && data.timeline.length < data.total_segments) {
+      console.warn(`Prerender incomplete: ${data.timeline.length}/${data.total_segments} segments. Falling back to WAV.`);
+      _chapterPrerenderChId = chId; // don't re-POST
+      return false;
+    }
+
     if (gen !== _playGen || !isPlaying) return true;
     _segStart = {};
     _segEnd   = {};
@@ -624,17 +642,36 @@ async function _playSegmentChapterMode(idx, gen) {
       _segDurations[i] = t_end - t_start;
     }
 
+    // Silence the standby element so a leftover preloaded WAV segment doesn't
+    // fire _onAudioEnded while the chapter file is playing.
+    const sb = _standby();
+    sb.pause();
+    sb.src = '';
+    _preloadIdx  = -1;
+    _preloadData = null;
+
     audio.src = data.audio_url;
     audio.playbackRate = speedMultiplier;
     _chapterAudioChId = currentChapterId;
     _preloadNextChapter();
   }
 
-  // Seek to segment start if needed
+  // Seek to segment start — must wait for metadata if src was just set,
+  // otherwise currentTime assignment is silently ignored and playback
+  // starts from 0 (wrong segment highlighted, spurious chapter advance).
   const start = _segStart[idx] ?? 0;
-  const inRange = audio.currentTime >= start &&
+  const inRange = audio.currentTime >= start - 0.05 &&
                   audio.currentTime < (_segEnd[idx] ?? start + 1);
-  if (!inRange) audio.currentTime = start;
+  if (!inRange) {
+    if (audio.readyState < HTMLMediaElement.HAVE_METADATA) {
+      await new Promise(r => {
+        audio.addEventListener('loadedmetadata', r, { once: true });
+        audio.addEventListener('error', r, { once: true });
+      });
+    }
+    if (gen !== _playGen || !isPlaying) return true;
+    audio.currentTime = start;
+  }
 
   charEl.textContent = charLabel;
   const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
@@ -782,8 +819,15 @@ async function _advanceChapter() {
 function _onAudioEnded() {
   stopWordHighlight();
   if (!isPlaying) return;
-  if (_mseOk || _fullChapterMode) {
-    // MSE or full-chapter: 'ended' means the whole chapter file finished
+  // 'ended' means the whole chapter is done only when:
+  //   - MSE SourceBuffer is active (_sbReady) — stream covers the full chapter, OR
+  //   - Full-chapter file is loaded (_chapterAudioChId set for this chapter).
+  // _mseOk alone is NOT enough: Full mode falls back to WAV segments when the
+  // prerender isn't cached yet, leaving _sbReady=false even though _mseOk=true.
+  // In that fallback every segment fires 'ended', which must advance a segment,
+  // not the whole chapter.
+  const wholeChapter = (_mseOk && _sbReady) || (_fullChapterMode && _chapterAudioChId === currentChapterId);
+  if (wholeChapter) {
     queueProgressSave(currentChapterId, currentSegIdx);
     _advanceChapter();
     return;
@@ -827,9 +871,10 @@ function stopPlayback() {
     audio = _audioA;
     _preloadIdx       = -1;
     _preloadData      = null;
-    _chapterAudioChId = null;
-    _segStart         = {};
-    _segEnd           = {};
+    _chapterAudioChId    = null;
+    _chapterPrerenderChId = null;
+    _segStart            = {};
+    _segEnd              = {};
   }
   if (currentChapterId) queueProgressSave(currentChapterId, currentSegIdx);
   const btn = document.getElementById('btn-play');
@@ -862,12 +907,14 @@ function startWordHighlight(segIdx, durationSec) {
   function tick() {
     const t = audio.currentTime;
 
-    // MSE or full-chapter: detect natural transition to the next segment
+    // MSE or full-chapter: detect natural transition to the next segment.
+    // Scan forward past any segments that failed TTS and have no _segStart entry.
     if (_useTimeline && isPlaying) {
-      const nextStart = _segStart[segIdx + 1];
-      if (nextStart !== undefined && t >= nextStart) {
-        _onSegmentChange(segIdx + 1);
-        return; // _onSegmentChange starts a new rAF loop
+      for (let ni = segIdx + 1; ni < segments.length; ni++) {
+        const nextStart = _segStart[ni];
+        if (nextStart === undefined) continue; // segment was skipped (TTS failed)
+        if (t >= nextStart) { _onSegmentChange(ni); return; }
+        break; // next defined segment hasn't started yet
       }
     }
 
@@ -1050,13 +1097,17 @@ document.getElementById('speed-slider').oninput = function() {
 })();
 
 (function initModeToggle() {
-  const btn = document.getElementById('mode-btn');
+  const btn       = document.getElementById('mode-btn');
+  const reBtn     = document.getElementById('rerender-btn');
   if (!btn) return;
+
   function syncBtn() {
     btn.textContent = _fullChapterMode ? 'Full' : 'Seg';
     btn.classList.toggle('active', _fullChapterMode);
+    if (reBtn) reBtn.classList.toggle('hidden', !_fullChapterMode);
   }
   syncBtn();
+
   btn.onclick = () => {
     const wasPlaying = isPlaying;
     const idx = currentSegIdx;
@@ -1066,6 +1117,25 @@ document.getElementById('speed-slider').oninput = function() {
     syncBtn();
     if (wasPlaying) playSegment(idx);
   };
+
+  if (reBtn) {
+    reBtn.onclick = async () => {
+      if (!currentChapterId) return;
+      reBtn.disabled = true;
+      try {
+        await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/prerender`, { method: 'DELETE' });
+      } catch (_) {}
+      // Reset client-side cache state so next play triggers a fresh prerender
+      _chapterAudioChId     = null;
+      _chapterPrerenderChId = null;
+      _segStart             = {};
+      _segEnd               = {};
+      reBtn.disabled = false;
+      const wasPlaying = isPlaying;
+      const idx = currentSegIdx;
+      if (wasPlaying) { stopPlayback(); playSegment(idx); }
+    };
+  }
 })();
 
 // ── Sidebar toggle ────────────────────────────────────────────────────────────

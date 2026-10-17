@@ -59,6 +59,7 @@ tts = TTSEngine()
 DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 
 _export_jobs: dict = {}
+_chapter_prerender_jobs: dict = {}  # (book_id, chapter_id) -> job_id for in-progress renders
 
 # Per-chapter locks prevent concurrent segment building from racing on the
 # DELETE + INSERT in _store_segments when multiple requests hit the same
@@ -268,6 +269,7 @@ def _ensure_chapter_segments(book_id: int, chapter_id: int):
 @app.route('/')
 def library_page():
     return render_template('library.html')
+
 
 
 @app.route('/reader/<int:book_id>')
@@ -917,7 +919,7 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         import json
         tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
         with open(_chapter_render_meta(book_id, chapter_id), 'w') as f:
-            json.dump({'timeline': tl}, f)
+            json.dump({'timeline': tl, 'total_segments': len(segs)}, f)
 
         job['state'] = 'complete'
         job['message'] = 'Done'
@@ -929,6 +931,8 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         log.exception('Chapter prerender job %s failed', job_id)
         job['state'] = 'failed'
         job['error'] = str(e)
+    finally:
+        _chapter_prerender_jobs.pop((book_id, chapter_id), None)
 
 
 @app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/prerender', methods=['POST'])
@@ -943,10 +947,32 @@ def start_chapter_prerender(book_id, chapter_id):
             'cached': True,
             'audio_url': f'/api/chapter-audio/{book_id}/{chapter_id}',
             'timeline': meta['timeline'],
+            'total_segments': meta.get('total_segments'),
         })
+    key = (book_id, chapter_id)
+    existing = _chapter_prerender_jobs.get(key)
+    if existing and _export_jobs.get(existing, {}).get('state') in ('pending', 'running'):
+        return jsonify({'job_id': existing})
     job_id, _ = _make_export_job()
+    _chapter_prerender_jobs[key] = job_id
     threading.Thread(target=_run_chapter_prerender, args=(job_id, book_id, chapter_id), daemon=True).start()
     return jsonify({'job_id': job_id})
+
+
+@app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/prerender', methods=['DELETE'])
+def delete_chapter_prerender(book_id, chapter_id):
+    fmp4 = _chapter_render_fmp4(book_id, chapter_id)
+    meta_p = _chapter_render_meta(book_id, chapter_id)
+    removed = []
+    for p in (fmp4, meta_p):
+        try:
+            if os.path.exists(p):
+                os.remove(p)
+                removed.append(os.path.basename(p))
+        except OSError as e:
+            return jsonify({'error': str(e)}), 500
+    _chapter_prerender_jobs.pop((book_id, chapter_id), None)
+    return jsonify({'ok': True, 'removed': removed})
 
 
 @app.route('/api/chapter-audio/<int:book_id>/<int:chapter_id>')
