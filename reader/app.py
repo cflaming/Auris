@@ -811,15 +811,14 @@ _silence_file_ready  = False     # avoids repeated stat() after first generation
 def _section_break_silence(seg, segment_index):
     global _silence_file_ready
     wav_path = os.path.join(_ACD, f'{_SILENCE_CACHE_KEY}.wav')
-    if not _silence_file_ready:
-        if not os.path.exists(wav_path):
-            n = int(_SILENCE_DURATION * _SILENCE_SAMPLE_RATE)
-            with wave.open(wav_path, 'wb') as wf:
-                wf.setnchannels(1)
-                wf.setsampwidth(2)
-                wf.setframerate(_SILENCE_SAMPLE_RATE)
-                wf.writeframes(b'\x00\x00' * n)
-        _silence_file_ready = True
+    if not _silence_file_ready and not os.path.exists(wav_path):
+        n = int(_SILENCE_DURATION * _SILENCE_SAMPLE_RATE)
+        with wave.open(wav_path, 'wb') as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(_SILENCE_SAMPLE_RATE)
+            wf.writeframes(b'\x00\x00' * n)
+    _silence_file_ready = True
     if seg.get('cache_key') != _SILENCE_CACHE_KEY:
         with get_conn() as conn:
             conn.execute(
