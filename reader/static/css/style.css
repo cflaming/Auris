@@ -5,6 +5,7 @@
 :root {
   --topnav-height: 52px;
   --mobile-toolbar-height: 36px;
+  --progress-bar-height: 2px;
 }
 
 /* ── Theme variables ────────────────────────────────────────────────────────── */
@@ -397,6 +398,7 @@ code {
   display: flex; align-items: center; gap: 10px;
   padding: 9px 20px; border-bottom: 1px solid var(--border);
   background: var(--bg2); flex-shrink: 0;
+  position: relative;
 }
 
 .chapter-title-bar {
@@ -411,7 +413,9 @@ code {
 .reader-toolbar .btn { height: 28px; box-sizing: border-box; }
 #toc-toggle, #bookmark-btn, #bm-panel-toggle { font-size: 1rem; }
 .chapter-progress-bar {
-  height: 2px; background: var(--bg3); flex-shrink: 0;
+  position: absolute; bottom: calc(-1 * var(--progress-bar-height));
+  left: 0; right: 0; height: var(--progress-bar-height);
+  background: var(--bg3);
 }
 .chapter-progress-fill {
   height: 100%; background: var(--accent);
@@ -1016,9 +1020,12 @@ body.theme-paper .voice-swatch[style] {
     width: min(82vw, 320px);
     transform: translateX(100%);
   }
+  .reader-toolbar {
+    overflow: visible;
+  }
   .reader-main {
     min-width: 0;
-    padding-top: var(--mobile-toolbar-height);
+    padding-top: calc(var(--mobile-toolbar-height) + var(--progress-bar-height));
   }
   .voice-legend { padding: 8px 16px; }
   .chapter-content {
