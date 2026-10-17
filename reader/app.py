@@ -64,7 +64,19 @@ DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 
 _export_jobs: dict = {}
 _chapter_prerender_jobs: dict = {}  # (book_id, chapter_id) -> job_id for in-progress renders
-_prerender_sem = threading.Semaphore(1)  # one prerender job runs at a time (single GPU)
+
+import queue as _queue
+_prerender_queue: _queue.Queue = _queue.Queue()
+
+def _prerender_worker():
+    while True:
+        job_id, book_id, chapter_id = _prerender_queue.get()
+        try:
+            _run_chapter_prerender(job_id, book_id, chapter_id)
+        finally:
+            _prerender_queue.task_done()
+
+threading.Thread(target=_prerender_worker, daemon=True, name='prerender-worker').start()
 
 # ── Seg-mode TTS activity tracker ────────────────────────────────────────────
 from collections import deque as _deque
@@ -1028,8 +1040,6 @@ def serve_audio_fmp4(cache_key):
 
 def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
     job = _export_jobs[job_id]
-    job['message'] = 'Waiting for GPU…'
-    _prerender_sem.acquire()
     try:
         job['state'] = 'running'
         job['message'] = 'Loading segments...'
@@ -1082,7 +1092,6 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         job['state'] = 'failed'
         job['error'] = str(e)
     finally:
-        _prerender_sem.release()
         _chapter_prerender_jobs.pop((book_id, chapter_id), None)
 
 
@@ -1103,9 +1112,10 @@ def start_chapter_prerender(book_id, chapter_id):
     existing = _chapter_prerender_jobs.get(key)
     if existing and _export_jobs.get(existing, {}).get('state') in ('pending', 'running'):
         return jsonify({'job_id': existing})
-    job_id, _ = _make_export_job()
+    job_id, job = _make_export_job()
+    job['message'] = 'Queued'
     _chapter_prerender_jobs[key] = job_id
-    threading.Thread(target=_run_chapter_prerender, args=(job_id, book_id, chapter_id), daemon=True).start()
+    _prerender_queue.put((job_id, book_id, chapter_id))
     return jsonify({'job_id': job_id})
 
 
