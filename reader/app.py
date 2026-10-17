@@ -1232,4 +1232,6 @@ if __name__ == '__main__':
     parser.add_argument('--port', type=int, default=int(os.environ.get('AURIS_PORT', 7860)))
     parser.add_argument('--debug', action='store_true', default=os.environ.get('AURIS_DEBUG', '').lower() in ('1', 'true'))
     args = parser.parse_args()
+    display_host = '127.0.0.1' if args.host == '0.0.0.0' else args.host
+    print(f" * Open your browser at: http://{display_host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug, threaded=True)
