@@ -83,9 +83,10 @@ def init_db():
             instruct      TEXT,
             speed         REAL DEFAULT 1.0,
             is_dialogue   INTEGER DEFAULT 0,
-            audio_path    TEXT,
-            duration_sec  REAL,
-            cache_key     TEXT UNIQUE
+            audio_path      TEXT,
+            duration_sec    REAL,
+            cache_key       TEXT UNIQUE,
+            generation_sec  REAL
         );
 
         CREATE TABLE IF NOT EXISTS bookmarks (
@@ -120,6 +121,13 @@ def init_db():
             # Another character (same book) this one is merged into, e.g. a
             # hero name for a civilian name. Its lines use that voice.
             conn.execute("ALTER TABLE characters ADD COLUMN alias_of INTEGER")
+
+        seg_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(tts_segments)").fetchall()
+        }
+        if "generation_sec" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
 
     # Remove UNIQUE constraint from tts_segments.cache_key so identical sentences
     # in different chapters don't cause INSERT OR IGNORE to silently drop segments.

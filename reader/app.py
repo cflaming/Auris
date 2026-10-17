@@ -325,7 +325,7 @@ def debug_chapter_cache():
         if book_id and chapter_id:
             segs = [dict(r) for r in conn.execute(
                 '''SELECT segment_index, character_name, text,
-                          audio_path, duration_sec, cache_key
+                          audio_path, duration_sec, cache_key, generation_sec
                    FROM tts_segments
                    WHERE book_id=? AND chapter_id=?
                    ORDER BY segment_index''',
@@ -886,6 +886,7 @@ def tts_generate():
         ref_audio = _book_narrator_ref_audio(book_id)
 
     rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
+    t0 = time.time()
     try:
         result = tts.generate(
             text=seg['enriched_text'],
@@ -896,11 +897,12 @@ def tts_generate():
     except RuntimeError as e:
         _tts_finish(rid, error=str(e))
         return jsonify({'error': str(e)}), 503
+    generation_sec = round(time.time() - t0, 2)
 
     with get_conn() as conn:
         conn.execute(
-            'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
-            (result['audio_path'], result['duration_sec'], result['cache_key'], seg['id'])
+            'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
+            (result['audio_path'], result['duration_sec'], result['cache_key'], generation_sec, seg['id'])
         )
 
     _tts_finish(rid, cached=result['cache_hit'], duration_sec=result['duration_sec'])

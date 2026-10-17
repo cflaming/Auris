@@ -156,13 +156,18 @@ async function ciChapterChange() {
     const ok   = s.file_ok;
     const dot  = `<span style="color:${ok ? '#4ade80' : '#f87171'}">${ok ? '●' : '○'}</span>`;
     const dur  = s.duration_sec ? s.duration_sec.toFixed(2) + 's' : '—';
+    const gen  = s.generation_sec != null ? s.generation_sec.toFixed(2) + 's' : '—';
+    const rtf  = (s.generation_sec != null && s.duration_sec)
+               ? (s.generation_sec / s.duration_sec).toFixed(2) + '×' : '—';
     const char = escH(s.character_name || 'Narrator');
     const txt  = escH((s.text || '').slice(0, 60)) + ((s.text||'').length > 60 ? '…' : '');
     return `<tr>
       <td style="text-align:right;padding-right:10px;color:var(--text2)">${s.segment_index}</td>
       <td style="padding-right:10px">${dot}</td>
       <td style="padding-right:14px;white-space:nowrap">${char}</td>
-      <td style="padding-right:14px;color:var(--text2);white-space:nowrap">${dur}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="audio runtime">${dur}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="synthesis time">${gen}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="real-time factor (synth/runtime)">${rtf}</td>
       <td style="color:var(--text2)">${txt}</td>
     </tr>`;
   }).join('');
