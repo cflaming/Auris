@@ -869,7 +869,7 @@ function startWordHighlight(segIdx, durationSec) {
       }
     }
 
-    const elapsed = (t - segStart) * speedMultiplier;
+    const elapsed = t - segStart;
     const wordIdx = Math.min(Math.floor((elapsed / durationSec) * n), n - 1);
     wordEls.forEach((el, i) => el.classList.toggle('playing', i === wordIdx));
     if (isPlaying && !audio.paused) _wordRafId = requestAnimationFrame(tick);
