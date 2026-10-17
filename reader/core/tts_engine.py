@@ -271,6 +271,14 @@ class TTSEngine:
         return "cpu"
 
     @staticmethod
+    def _ref_fingerprint(path: str) -> str:
+        """Return a freshness fingerprint for a ref-audio file (mtime, or '' on error)."""
+        try:
+            return str(os.path.getmtime(path))
+        except OSError:
+            return ""
+
+    @staticmethod
     def cache_key(
         text: str,
         instruct: str | None,
@@ -283,12 +291,7 @@ class TTSEngine:
         # a fresh clip apart from the one it replaced. Mixing in mtime makes
         # a re-upload produce a new key instead of silently reusing the old
         # cached generation.
-        ref_fingerprint = ""
-        if ref_audio:
-            try:
-                ref_fingerprint = str(os.path.getmtime(ref_audio))
-            except OSError:
-                pass
+        ref_fingerprint = TTSEngine._ref_fingerprint(ref_audio) if ref_audio else ""
         payload = f"{text}|{instruct}|{ref_audio}|{ref_fingerprint}|{ref_text}|{speed:.2f}"
         return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
@@ -309,11 +312,7 @@ class TTSEngine:
 
     def _get_voice_clone_prompt(self, ref_audio: str, ref_text: str | None):
         """Return a cached VoiceClonePrompt, building it on first use (must hold self._lock)."""
-        try:
-            mtime = str(os.path.getmtime(ref_audio))
-        except OSError:
-            mtime = ""
-        cache_key = (ref_audio, mtime)
+        cache_key = (ref_audio, self._ref_fingerprint(ref_audio))
         prompt = self._voice_clone_prompts.get(cache_key)
         if prompt is None:
             prompt = self.model.create_voice_clone_prompt(ref_audio, ref_text)
@@ -332,9 +331,7 @@ class TTSEngine:
         with self._lock:
             if not self._ready or self.model is None:
                 raise RuntimeError("Model is not loaded yet. " + (self._error or "Call load_async() first."))
-            voice_clone_prompt = None
-            if ref_audio is not None:
-                voice_clone_prompt = self._get_voice_clone_prompt(ref_audio, ref_text)
+            voice_clone_prompt = self._get_voice_clone_prompt(ref_audio, ref_text) if ref_audio is not None else None
             audio_arrays = self.model.generate(
                 text=text,
                 instruct=instruct,
@@ -432,8 +429,10 @@ class TTSEngine:
                 "duration_sec": len(data) / sr,
                 "cache_hit": True,
                 "cache_key": key,
+                "generation_sec": 0.0,
             }
 
+        t0 = time.time()
         audio = self._synthesize_audio(
             text=text,
             instruct=effective_instruct,
@@ -449,6 +448,7 @@ class TTSEngine:
             "duration_sec": len(audio) / SAMPLE_RATE,
             "cache_hit": False,
             "cache_key": key,
+            "generation_sec": round(time.time() - t0, 2),
         }
 
     def generate_preview(
