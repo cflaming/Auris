@@ -1439,6 +1439,29 @@ document.getElementById('do-export-btn').onclick = async () => {
   }
 };
 
+document.getElementById('preload-btn').onclick = async () => {
+  if (!currentChapterId) { showToast('Open a chapter first.'); return; }
+  const status = document.getElementById('preload-status');
+  const btn    = document.getElementById('preload-btn');
+  const idx    = chapters.findIndex(c => c.id === currentChapterId);
+  if (idx < 0) { showToast('Chapter not found.'); return; }
+  const remaining = chapters.slice(idx);
+  btn.disabled = true;
+  status.textContent = `Queuing ${remaining.length} chapter${remaining.length === 1 ? '' : 's'}…`;
+  let queued = 0, cached = 0;
+  await Promise.all(remaining.map(async ch => {
+    try {
+      const d = await fetch(`/api/books/${BOOK_ID}/chapters/${ch.id}/prerender`, { method: 'POST' }).then(r => r.json());
+      if (d.cached) cached++; else queued++;
+    } catch (_) {}
+  }));
+  btn.disabled = false;
+  const parts = [];
+  if (queued) parts.push(`${queued} queued`);
+  if (cached) parts.push(`${cached} already cached`);
+  status.textContent = parts.join(', ') || 'Done.';
+};
+
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 
 document.addEventListener('keydown', e => {

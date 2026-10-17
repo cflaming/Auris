@@ -690,6 +690,7 @@ body.theme-paper .voice-swatch[style] {
   border-radius: 2px; transition: width 0.35s ease;
 }
 .export-status { font-size: 0.78rem; color: var(--text2); margin-top: 4px; min-height: 18px; }
+.export-divider { border-top: 1px solid var(--border); margin: 10px 0 2px; }
 
 /* ── Voice Studio ───────────────────────────────────────────────────────────── */
 .studio-page { max-width: 960px; margin: 0 auto; padding: 36px 28px 100px; }
