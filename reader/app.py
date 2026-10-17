@@ -1160,16 +1160,18 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
         else:
             ref_audio = narrator_ref
         try:
+            t0 = time.time()
             result = tts.generate(
                 text=seg['enriched_text'],
                 instruct=seg['instruct'],
                 ref_audio=ref_audio,
                 speed=seg['speed'],
             )
+            generation_sec = round(time.time() - t0, 2)
             with get_conn() as conn:
                 conn.execute(
-                    'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
-                    (result['audio_path'], result['duration_sec'], result['cache_key'], seg['id'])
+                    'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
+                    (result['audio_path'], result['duration_sec'], result['cache_key'], generation_sec, seg['id'])
                 )
             seg['audio_path'] = result['audio_path']
             seg['duration_sec'] = result['duration_sec']

@@ -141,6 +141,7 @@ class TTSEngine:
         self._downloading = False
         self._ready = False
         self._error: str | None = None
+        self._voice_clone_prompts: dict = {}  # (path, mtime) -> VoiceClonePrompt
         os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
         os.makedirs(VOICE_REF_DIR, exist_ok=True)
 
@@ -209,6 +210,14 @@ class TTSEngine:
             )
             self._ready = True
             log.info("OmniVoice model ready.")
+            # One dummy inference to trigger CUDA kernel compilation so the
+            # first real request doesn't pay the JIT warmup cost.
+            try:
+                log.info("Warming up CUDA kernels...")
+                self.model.generate(text="Hello.", num_step=4)
+                log.info("Warmup complete.")
+            except Exception as warm_exc:
+                log.warning("Model warmup failed (non-fatal): %s", warm_exc)
         except Exception as exc:
             self._error = str(exc)
             log.error("Failed to load OmniVoice: %s", exc)
@@ -298,6 +307,19 @@ class TTSEngine:
     def _needs_voice_design_stabilization(text: str, instruct: str | None, ref_audio: str | None) -> bool:
         return bool(instruct and not ref_audio)
 
+    def _get_voice_clone_prompt(self, ref_audio: str, ref_text: str | None):
+        """Return a cached VoiceClonePrompt, building it on first use (must hold self._lock)."""
+        try:
+            mtime = str(os.path.getmtime(ref_audio))
+        except OSError:
+            mtime = ""
+        cache_key = (ref_audio, mtime)
+        prompt = self._voice_clone_prompts.get(cache_key)
+        if prompt is None:
+            prompt = self.model.create_voice_clone_prompt(ref_audio, ref_text)
+            self._voice_clone_prompts = {cache_key: prompt}  # evict stale entries on rebuild
+        return prompt
+
     def _synthesize_audio(
         self,
         text: str,
@@ -310,11 +332,13 @@ class TTSEngine:
         with self._lock:
             if not self._ready or self.model is None:
                 raise RuntimeError("Model is not loaded yet. " + (self._error or "Call load_async() first."))
+            voice_clone_prompt = None
+            if ref_audio is not None:
+                voice_clone_prompt = self._get_voice_clone_prompt(ref_audio, ref_text)
             audio_arrays = self.model.generate(
                 text=text,
                 instruct=instruct,
-                ref_audio=ref_audio,
-                ref_text=ref_text,
+                voice_clone_prompt=voice_clone_prompt,
                 speed=speed,
                 num_step=num_step,
             )
