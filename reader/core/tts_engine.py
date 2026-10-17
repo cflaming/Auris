@@ -319,6 +319,14 @@ class TTSEngine:
             self._voice_clone_prompts = {cache_key: prompt}  # evict stale entries on rebuild
         return prompt
 
+    @staticmethod
+    def _normalise_audio(audio) -> np.ndarray:
+        if not isinstance(audio, np.ndarray):
+            audio = np.array(audio)
+        if audio.ndim > 1:
+            audio = audio.mean(axis=0)
+        return audio
+
     def _synthesize_audio(
         self,
         text: str,
@@ -341,11 +349,34 @@ class TTSEngine:
             )
 
         audio = audio_arrays[0] if isinstance(audio_arrays, list) else audio_arrays
-        if not isinstance(audio, np.ndarray):
-            audio = np.array(audio)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=0)
-        return audio
+        return self._normalise_audio(audio)
+
+    def _resolve_item(
+        self,
+        text: str,
+        instruct: str | None,
+        ref_audio: str | None,
+        speed: float,
+        ref_text: str | None = None,
+        vd_cache: dict | None = None,
+    ) -> tuple:
+        """Resolve effective params and return (eff_instruct, eff_ref_audio, eff_ref_text, cache_key, cache_path).
+
+        vd_cache: when provided, voice-design stabilisation results are cached by instruct
+        string so segments sharing a voice only pay the synthesis cost once.
+        """
+        eff_instruct = _stabilize_voice_design_instruct(instruct)
+        eff_ref_audio, eff_ref_text = ref_audio, ref_text
+        if self._needs_voice_design_stabilization(text, eff_instruct, ref_audio):
+            if vd_cache is not None and eff_instruct in vd_cache:
+                eff_ref_audio, eff_ref_text = vd_cache[eff_instruct]
+            else:
+                eff_ref_audio, eff_ref_text = self._ensure_voice_design_reference(eff_instruct)
+                if vd_cache is not None:
+                    vd_cache[eff_instruct] = (eff_ref_audio, eff_ref_text)
+        key = self.cache_key(text, eff_instruct, eff_ref_audio, speed, ref_text=eff_ref_text)
+        path = self.cache_path(key)
+        return eff_instruct, eff_ref_audio, eff_ref_text, key, path
 
     def _ensure_voice_design_reference(self, instruct: str) -> tuple[str, str]:
         ref_path = self._voice_ref_path(instruct)
@@ -418,14 +449,10 @@ class TTSEngine:
                 num_step=num_step,
             )
 
-        result = []
-        for audio in audio_arrays:
-            if not isinstance(audio, np.ndarray):
-                audio = np.array(audio)
-            if audio.ndim > 1:
-                audio = audio.mean(axis=0)
-            result.append(audio)
-        return result
+        return [self._normalise_audio(a) for a in audio_arrays]
+
+    # Lazily initialised RuleDurationEstimator singleton (stateless after construction).
+    _dur_est = None
 
     def generate_batch(
         self,
@@ -438,8 +465,10 @@ class TTSEngine:
         Each item: {text, instruct?, ref_audio?, speed?}.
         Returns results in the same order as items.  Failed items get None.
         """
-        from omnivoice.utils.duration import RuleDurationEstimator
-        dur_est = RuleDurationEstimator()
+        if TTSEngine._dur_est is None:
+            from omnivoice.utils.duration import RuleDurationEstimator
+            TTSEngine._dur_est = RuleDurationEstimator()
+        dur_est = TTSEngine._dur_est
 
         results: list[dict | None] = [None] * len(items)
         uncached: list[tuple] = []
@@ -447,19 +476,17 @@ class TTSEngine:
         # Phase 1: voice design stabilization + cache check.
         # _ensure_voice_design_reference calls _synthesize_audio which acquires
         # self._lock, so we must do this before any code that also holds the lock.
+        # vd_cache avoids redundant synthesis for segments that share a voice instruct.
+        vd_cache: dict = {}
         for i, item in enumerate(items):
             text = item["text"]
             instruct = item.get("instruct")
             ref_audio = item.get("ref_audio")
             speed = float(item.get("speed") or 1.0)
 
-            eff_instruct = _stabilize_voice_design_instruct(instruct)
-            eff_ref_audio, eff_ref_text = ref_audio, None
-            if self._needs_voice_design_stabilization(text, eff_instruct, ref_audio):
-                eff_ref_audio, eff_ref_text = self._ensure_voice_design_reference(eff_instruct)
-
-            key = self.cache_key(text, eff_instruct, eff_ref_audio, speed, ref_text=eff_ref_text)
-            path = self.cache_path(key)
+            eff_instruct, eff_ref_audio, eff_ref_text, key, path = self._resolve_item(
+                text, instruct, ref_audio, speed, vd_cache=vd_cache
+            )
             if os.path.exists(path):
                 data, sr = sf.read(path)
                 results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
@@ -471,18 +498,23 @@ class TTSEngine:
             return results
 
         # Phase 2: estimate total (ref + generated) duration per item for batch sizing.
+        # ref_dur_cache avoids re-reading the same ref file header for every segment
+        # belonging to the same character.
+        ref_dur_cache: dict[str, float] = {}
+
         def _est_total(text, ref_text, ref_audio):
             ref_dur = 0.0
             if ref_audio:
-                try:
-                    info = sf.info(ref_audio)
-                    ref_dur = info.frames / info.samplerate
-                except Exception:
-                    pass
-            gen_dur = dur_est.estimate_duration(
+                if ref_audio not in ref_dur_cache:
+                    try:
+                        info = sf.info(ref_audio)
+                        ref_dur_cache[ref_audio] = info.frames / info.samplerate
+                    except Exception:
+                        ref_dur_cache[ref_audio] = 0.0
+                ref_dur = ref_dur_cache[ref_audio]
+            return ref_dur + dur_est.estimate_duration(
                 text, ref_text or "Nice to meet you.", max(ref_dur, 0.5), low_threshold=2.0
             )
-            return ref_dur + gen_dur
 
         # Phase 3: split clone (has ref_audio) vs other (no ref_audio) so that each
         # batch passed to the model is homogeneous — mixing modes crashes the model.
@@ -505,6 +537,8 @@ class TTSEngine:
 
         # Phase 4: one GPU call per sub-batch, save files.
         for group in (clone, other):
+            if not group:
+                continue
             for batch in _cluster(group):
                 t0 = time.time()
                 try:
@@ -551,21 +585,9 @@ class TTSEngine:
                 cache_key: str,
             }
         """
-        effective_instruct = _stabilize_voice_design_instruct(instruct)
-        effective_ref_audio = ref_audio
-        effective_ref_text = ref_text
-
-        if self._needs_voice_design_stabilization(text, effective_instruct, ref_audio):
-            effective_ref_audio, effective_ref_text = self._ensure_voice_design_reference(effective_instruct)
-
-        key = self.cache_key(
-            text,
-            effective_instruct,
-            effective_ref_audio,
-            speed,
-            ref_text=effective_ref_text,
+        effective_instruct, effective_ref_audio, effective_ref_text, key, path = self._resolve_item(
+            text, instruct, ref_audio, speed, ref_text=ref_text
         )
-        path = self.cache_path(key)
 
         if os.path.exists(path):
             data, sr = sf.read(path)

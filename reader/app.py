@@ -1159,8 +1159,8 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
     narrator_ref = _book_narrator_ref_audio(book_id)
 
     def _ref_for(seg):
-        char = chars.get(seg['character_name']) if seg['character_name'] else None
-        return (char['ref_audio_path'] if char and char.get('ref_audio_path') else None) if char else narrator_ref
+        char = chars.get(seg['character_name'])
+        return char.get('ref_audio_path') or None if char else narrator_ref
 
     items, pending_segs = [], []
     for seg in segs:
