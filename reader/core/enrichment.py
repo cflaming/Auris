@@ -26,7 +26,6 @@ _DINKUS_RE = re.compile(
     r"|^\s*[-—]{3,}\s*$"             # --- or ———
     r"|^\s*[◆◇✦✧★☆•·#]\s*$"         # single decorative glyph
     r"|^\s*(?:[◆◇✦✧★☆•·#]\s*){2,}$", # repeated glyphs
-    re.MULTILINE,
 )
 
 _SECTION_HEADING_RE = re.compile(
@@ -585,7 +584,7 @@ def _attribute_paragraphs(paragraph_spans: list, character_map: dict) -> list[st
     for para_no, (spans, ended_open) in enumerate(paragraph_spans):
         has_quote = any(is_quote for is_quote, _ in spans)
         narration = " ".join(text for is_quote, text in spans if not is_quote)
-        if _SCENE_BREAK_RE.match(spans[0][1]):
+        if _DINKUS_RE.match(spans[0][1].strip()):
             turns.clear()
             addressed = None
         local = [aliases[m.group(0)] for m in names_re.finditer(narration)] if names_re else []

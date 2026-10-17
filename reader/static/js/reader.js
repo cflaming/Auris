@@ -306,7 +306,7 @@ function renderContent(segs) {
   });
 
   const renderSeg = (seg, i) => {
-    if (seg.is_section_break || seg.text === '') {
+    if (seg.text === '') {
       return `<span class="section-break" data-idx="${i}" onclick="jumpTo(${i})">* * *</span>`;
     }
     const words = seg.text.split(/(\s+)/);

@@ -3,6 +3,7 @@ Offline Ebook Reader — Flask application.
 """
 
 import base64
+import json
 import logging
 import os
 import re
@@ -264,10 +265,8 @@ def _ensure_chapter_segments(book_id: int, chapter_id: int):
             if rows:
                 return rows
 
-    segs = _compute_segments_for_chapter(book_id, chapter_id)
-    if not segs:
+    if not _build_segments_for_chapter(book_id, chapter_id):
         return []
-    _store_segments(book_id, chapter_id, segs)
     with get_conn() as conn:
         return conn.execute(
             'SELECT * FROM tts_segments WHERE book_id=? AND chapter_id=? ORDER BY segment_index',
@@ -322,7 +321,6 @@ def debug_chapter_cache():
         fmp4   = _chapter_render_fmp4(book_id, chapter_id)
         meta_p = _chapter_render_meta(book_id, chapter_id)
         if os.path.exists(fmp4) and os.path.exists(meta_p):
-            import json
             prerender_cached = True
             try:
                 with open(meta_p) as f:
@@ -911,7 +909,7 @@ def get_segments(book_id, chapter_id):
         'text': r['text'],
         'character_name': r['character_name'],
         'is_dialogue': bool(r['is_dialogue']),
-        'has_audio': bool(r['audio_path'] and os.path.exists(r['audio_path'])),
+        'has_audio': bool(r['audio_path']),
         'duration_sec': r['duration_sec'],
         'cache_key': r['cache_key'],
     } for r in rows])
@@ -1028,7 +1026,6 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         try: os.remove(wav_path)
         except OSError: pass
 
-        import json
         tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
         with open(_chapter_render_meta(book_id, chapter_id), 'w') as f:
             json.dump({'timeline': tl, 'total_segments': len(segs)}, f)
@@ -1049,7 +1046,6 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
 
 @app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/prerender', methods=['POST'])
 def start_chapter_prerender(book_id, chapter_id):
-    import json
     fmp4 = _chapter_render_fmp4(book_id, chapter_id)
     meta_p = _chapter_render_meta(book_id, chapter_id)
     if os.path.exists(fmp4) and os.path.exists(meta_p):

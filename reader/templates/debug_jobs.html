@@ -69,10 +69,6 @@
 <script>
 let _timer = null;
 
-function stateColor(s) {
-  return s === 'running' ? 'running' : s === 'complete' ? 'complete' : s === 'failed' ? 'failed' : 'pending';
-}
-
 function renderJob(j) {
   const pct = j.total ? Math.round((j.done || 0) / j.total * 100) : null;
   const bar = pct !== null
@@ -84,7 +80,7 @@ function renderJob(j) {
   const err = j.error ? `<div style="color:#f87171;margin-top:4px">${escH(j.error)}</div>` : '';
   return `<div class="job">
     <div class="job-header">
-      <span class="job-state ${stateColor(j.state)}">${j.state}</span>
+      <span class="job-state ${j.state || 'pending'}">${j.state}</span>
       <span>${escH(j.message || '')}</span>
       <span class="job-id">${j.id}</span>
     </div>
