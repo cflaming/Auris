@@ -11,7 +11,7 @@ import re
 
 # Bump whenever the enrichment output changes in a way that requires
 # existing stored segments to be discarded and rebuilt.
-ENRICHMENT_VERSION = 1
+ENRICHMENT_VERSION = 3
 
 _DOT = "<prd>"
 _ELLIPSIS = "<ell>"
@@ -235,6 +235,12 @@ def _split_paragraphs(text: str, chapter_title: str | None = None) -> list[str]:
 
         buffer: list[str] = []
         for line in lines:
+            if _DINKUS_RE.match(line):
+                if buffer:
+                    paragraphs.append(" ".join(buffer).strip())
+                    buffer = []
+                paragraphs.append(line)
+                continue
             if _is_heading_paragraph(line, chapter_title):
                 if buffer:
                     paragraphs.append(" ".join(buffer).strip())
@@ -780,11 +786,14 @@ def enrich_chapter(
     """
     cleaned_text = str(chapter_text or "").strip()
     scene_speed = _scene_speed(cleaned_text)
-    paragraph_spans = [
-        _split_quote_spans(paragraph)
-        for paragraph in _split_paragraphs(cleaned_text, chapter_title)
-    ]
-    paragraph_spans = [(spans, ended_open) for spans, ended_open in paragraph_spans if spans]
+    paragraph_spans = []
+    for para in _split_paragraphs(cleaned_text, chapter_title):
+        if _DINKUS_RE.match(para.strip()):
+            paragraph_spans.append(([(False, para)], False))
+        else:
+            spans, ended_open = _split_quote_spans(para)
+            if spans:
+                paragraph_spans.append((spans, ended_open))
     speakers = _attribute_paragraphs(paragraph_spans, character_map)
 
     segments = []
