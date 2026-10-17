@@ -1095,7 +1095,27 @@ function initMediaSession() {
     album: 'Auris',
   });
   navigator.mediaSession.setActionHandler('play', () => {
-    if (!isPlaying) playSegment(currentSegIdx);
+    if (isPlaying) return;
+    // Resume from the exact paused position when audio is already loaded.
+    // Routing through playSegment() re-seeks to segment start in WAV mode,
+    // and relies on currentTime being preserved (not guaranteed on iOS after
+    // backgrounding with MSE). Direct resume matches HTML play button.
+    if (audio.src && !audio.ended) {
+      isPlaying = true;
+      _sleepTimerFired = false;
+      updateMediaSession(true);
+      updatePlaybackUI();
+      const dur = _segDur(currentSegIdx) || _segDurations[currentSegIdx] || 0;
+      startWordHighlight(currentSegIdx, dur);
+      audio.play().catch(() => {
+        isPlaying = false;
+        updateMediaSession(false);
+        updatePlaybackUI();
+        playSegment(currentSegIdx);
+      });
+    } else {
+      playSegment(currentSegIdx);
+    }
   });
   navigator.mediaSession.setActionHandler('pause', () => {
     if (isPlaying) { isPlaying = false; stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
