@@ -9,12 +9,25 @@ full stop.
 
 import re
 
+# Bump whenever the enrichment output changes in a way that requires
+# existing stored segments to be discarded and rebuilt.
+ENRICHMENT_VERSION = 1
+
 _DOT = "<prd>"
 _ELLIPSIS = "<ell>"
 _SPLIT = "<split>"
 _QUOTE_CLASS = r'["\u201c\u201d]'
 _QUOTE_CONTENT_CLASS = r'"\u201c\u201d'
 _NAME_PATTERN = r"[A-Z][A-Za-z'.-]+(?:\s+[A-Z][A-Za-z'.-]+){0,2}"
+
+# Matches section-break dinkuses: * * *, ***, ---, ◆, ✦, ★, #, lone em-dash, etc.
+_DINKUS_RE = re.compile(
+    r"^\s*(?:\*\s*){2,}\*\s*$"       # * * * or *** or * * * * *
+    r"|^\s*[-—]{3,}\s*$"             # --- or ———
+    r"|^\s*[◆◇✦✧★☆•·#]\s*$"         # single decorative glyph
+    r"|^\s*(?:[◆◇✦✧★☆•·#]\s*){2,}$", # repeated glyphs
+    re.MULTILINE,
+)
 
 _SECTION_HEADING_RE = re.compile(
     r"^\s*(?:"
@@ -778,6 +791,22 @@ def enrich_chapter(
     segments = []
     last_tag: str | None = None
     for paragraph, ((spans, _), speaker) in enumerate(zip(paragraph_spans, speakers)):
+        # Dinkus / section break — emit a silent ellipsis pause instead of reading it.
+        raw_paragraph = " ".join(span_text for _, span_text in spans)
+        if _DINKUS_RE.match(raw_paragraph.strip()):
+            segments.append({
+                "text": "",
+                "enriched_text": "……………",
+                "character_name": None,
+                "instruct": narrator_instruct,
+                "speed": 1.0,
+                "is_dialogue": False,
+                "is_whisper": False,
+                "paragraph": paragraph,
+                "is_section_break": True,
+            })
+            last_tag = None
+            continue
         for span_idx, (is_quote, span_text) in enumerate(spans):
             attribution, side = _span_attribution(spans, span_idx) if is_quote else ("", "")
             parts = _segment_text(span_text)

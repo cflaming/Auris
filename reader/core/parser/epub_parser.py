@@ -75,7 +75,6 @@ class _HTMLLineExtractor(HTMLParser):
             "h5",
             "h6",
             "br",
-            "hr",
         }
         self._current_skip = 0
 
@@ -85,6 +84,11 @@ class _HTMLLineExtractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
+        if tag == "hr":
+            self._line_break()
+            self.parts.append("***")
+            self._line_break()
+            return
         if tag in self._skip_tags:
             self._current_skip += 1
             return

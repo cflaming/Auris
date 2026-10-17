@@ -44,13 +44,14 @@ def init_db():
         );
 
         CREATE TABLE IF NOT EXISTS chapters (
-            id           INTEGER PRIMARY KEY AUTOINCREMENT,
-            book_id      INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-            title        TEXT NOT NULL,
-            order_num    INTEGER NOT NULL,
-            section_type TEXT DEFAULT 'chapter',
-            content      TEXT NOT NULL,
-            word_count   INTEGER DEFAULT 0
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id             INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            title               TEXT NOT NULL,
+            order_num           INTEGER NOT NULL,
+            section_type        TEXT DEFAULT 'chapter',
+            content             TEXT NOT NULL,
+            word_count          INTEGER DEFAULT 0,
+            enrichment_version  INTEGER DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS characters (
@@ -83,6 +84,7 @@ def init_db():
             instruct      TEXT,
             speed         REAL DEFAULT 1.0,
             is_dialogue   INTEGER DEFAULT 0,
+            paragraph       INTEGER DEFAULT 0,
             audio_path      TEXT,
             duration_sec    REAL,
             cache_key       TEXT UNIQUE,
@@ -128,6 +130,15 @@ def init_db():
         }
         if "generation_sec" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
+        if "paragraph" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN paragraph INTEGER DEFAULT 0")
+
+        ch_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(chapters)").fetchall()
+        }
+        if "enrichment_version" not in ch_cols:
+            conn.execute("ALTER TABLE chapters ADD COLUMN enrichment_version INTEGER DEFAULT 0")
 
     # Remove UNIQUE constraint from tts_segments.cache_key so identical sentences
     # in different chapters don't cause INSERT OR IGNORE to silently drop segments.

@@ -306,12 +306,14 @@ function renderContent(segs) {
   });
 
   const renderSeg = (seg, i) => {
+    if (seg.is_section_break || seg.text === '') {
+      return `<span class="section-break" data-idx="${i}" onclick="jumpTo(${i})">* * *</span>`;
+    }
     const words = seg.text.split(/(\s+)/);
     const wordSpans = words.map((w, wi) => {
       if (/^\s+$/.test(w)) return w;
       return `<span class="word" data-seg="${i}" data-word="${wi}">${esc(w)}</span>`;
     }).join('');
-
 
     const name = seg.character_name;
     const color = name && charColors[name];
@@ -940,11 +942,12 @@ function stopWordHighlight() {
 function highlightSegment(idx, options = {}) {
   const behavior = options.behavior || 'smooth';
   _ignoreScrollTrackingUntil = Date.now() + (behavior === 'smooth' ? 700 : 150);
-  document.querySelectorAll('.sentence').forEach((el, i) => {
-    el.classList.toggle('playing', i === idx);
-    el.classList.toggle('spoken',  i < idx);
+  document.querySelectorAll('.sentence, .section-break').forEach(el => {
+    const elIdx = parseInt(el.dataset.idx, 10);
+    el.classList.toggle('playing', elIdx === idx);
+    el.classList.toggle('spoken',  elIdx < idx);
   });
-  const active = document.querySelector(`.sentence[data-idx="${idx}"]`);
+  const active = document.querySelector(`[data-idx="${idx}"]`);
   if (active) active.scrollIntoView({ behavior, block: 'center' });
 }
 

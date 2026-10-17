@@ -459,6 +459,22 @@ code {
   color: var(--accent);
 }
 
+/* Section break dinkus */
+.section-break {
+  display: block;
+  text-align: center;
+  color: var(--text2);
+  letter-spacing: .4em;
+  padding: .8em 0;
+  cursor: pointer;
+  user-select: none;
+  border-radius: 2px;
+  transition: background .12s;
+}
+.section-break:hover   { background: var(--highlight); }
+.section-break.playing { background: var(--playing); outline: 1px solid var(--accent); outline-offset: 1px; }
+.section-break.spoken  { opacity: .45; }
+
 /* Sentence highlighting */
 .sentence {
   cursor: pointer; border-radius: 2px;
