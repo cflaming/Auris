@@ -32,6 +32,7 @@ VOICE_DESIGN_REF_TEXT = (
 )
 VOICE_REF_MIN_ZCR = 0.015
 VOICE_REF_GEN_ATTEMPTS = 4
+_SILENCE_FALLBACK_FRAMES = int(0.3 * SAMPLE_RATE)
 VOICE_GENDERS = {"male", "female"}
 VOICE_AGES = {"child", "teenager", "young adult", "middle-aged", "elderly"}
 VOICE_PITCHES = {
@@ -351,6 +352,37 @@ class TTSEngine:
         audio = audio_arrays[0] if isinstance(audio_arrays, list) else audio_arrays
         return self._normalise_audio(audio)
 
+    @staticmethod
+    def _read_cached_wav(path: str) -> tuple[np.ndarray, int] | None:
+        """Return (audio, sr) for a valid cached WAV, or None (deleting the file) if missing/zero-length."""
+        if not os.path.exists(path):
+            return None
+        if sf.info(path).frames == 0:
+            log.warning("Deleting zero-length cached WAV at %s, re-synthesizing", path)
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+            return None
+        return sf.read(path)
+
+    def _synthesize_one(
+        self, text: str, instruct: str | None, ref_audio: str | None,
+        ref_text: str | None, speed: float, num_step: int,
+    ) -> np.ndarray:
+        """Synthesise one item; returns a silence fallback if text is empty or model output is zero-length."""
+        if not text or not text.strip():
+            log.warning("Empty text passed to synthesis — using silence fallback")
+            return np.zeros(_SILENCE_FALLBACK_FRAMES, dtype=np.float32)
+        audio = self._synthesize_audio(
+            text=text, instruct=instruct, ref_audio=ref_audio,
+            ref_text=ref_text, speed=speed, num_step=num_step,
+        )
+        if len(audio) == 0:
+            log.warning("Zero-length audio for %r — using silence fallback", text[:50])
+            audio = np.zeros(_SILENCE_FALLBACK_FRAMES, dtype=np.float32)
+        return audio
+
     def _resolve_item(
         self,
         text: str,
@@ -487,17 +519,12 @@ class TTSEngine:
             eff_instruct, eff_ref_audio, eff_ref_text, key, path = self._resolve_item(
                 text, instruct, ref_audio, speed, vd_cache=vd_cache
             )
-            if os.path.exists(path):
-                data, sr = sf.read(path)
-                if len(data) > 0:
-                    results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
-                                  "cache_hit": True, "cache_key": key, "generation_sec": 0.0}
-                    continue
-                log.warning("Deleting zero-length cached WAV at %s, re-synthesizing", path)
-                try:
-                    os.remove(path)
-                except OSError:
-                    pass
+            cached = self._read_cached_wav(path)
+            if cached is not None:
+                data, sr = cached
+                results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
+                              "cache_hit": True, "cache_key": key, "generation_sec": 0.0}
+                continue
             uncached.append((i, text, eff_instruct, eff_ref_audio, eff_ref_text, speed, key, path))
 
         if not uncached:
@@ -562,10 +589,7 @@ class TTSEngine:
                         orig_idx, text_u, instruct_u, ref_audio_u, ref_text_u, speed_u, key, path = u
                         t1 = time.time()
                         try:
-                            audio = self._synthesize_audio(
-                                text=text_u, instruct=instruct_u, ref_audio=ref_audio_u,
-                                ref_text=ref_text_u, speed=speed_u, num_step=num_step,
-                            )
+                            audio = self._synthesize_one(text_u, instruct_u, ref_audio_u, ref_text_u, speed_u, num_step)
                             sf.write(path, audio, SAMPLE_RATE)
                             results[orig_idx] = {
                                 "audio_path": path,
@@ -579,38 +603,24 @@ class TTSEngine:
                     continue
                 gen_per_item = round((time.time() - t0) / len(batch), 2)
                 for u, audio in zip(batch, audios):
-                    orig_idx, text_u, _, _, _, _, key, path = u
+                    orig_idx, text_u, inst_u, ref_u, rtext_u, spd_u, key, path = u
+                    gen_sec = gen_per_item
                     if len(audio) == 0:
                         log.warning("Zero-length audio in batch for item %d (%r), retrying individually", orig_idx, text_u[:40])
                         t1 = time.time()
                         try:
-                            _, _, inst_u, ref_u, rtext_u, spd_u, _, _ = u
-                            audio = self._synthesize_audio(
-                                text=text_u, instruct=inst_u, ref_audio=ref_u,
-                                ref_text=rtext_u, speed=spd_u, num_step=num_step,
-                            )
+                            audio = self._synthesize_one(text_u, inst_u, ref_u, rtext_u, spd_u, num_step)
                         except Exception as exc_retry:
                             log.warning("Individual retry also failed for item %d: %s", orig_idx, exc_retry)
                             continue
-                        if len(audio) == 0:
-                            log.warning("Individual retry also produced zero-length audio for item %d (%r) — using silence fallback", orig_idx, text_u[:40])
-                            audio = np.zeros(int(0.3 * SAMPLE_RATE), dtype=np.float32)
-                        sf.write(path, audio, SAMPLE_RATE)
-                        results[orig_idx] = {
-                            "audio_path": path,
-                            "duration_sec": len(audio) / SAMPLE_RATE,
-                            "cache_hit": False,
-                            "cache_key": key,
-                            "generation_sec": round(time.time() - t1, 2),
-                        }
-                        continue
+                        gen_sec = round(time.time() - t1, 2)
                     sf.write(path, audio, SAMPLE_RATE)
                     results[orig_idx] = {
                         "audio_path": path,
                         "duration_sec": len(audio) / SAMPLE_RATE,
                         "cache_hit": False,
                         "cache_key": key,
-                        "generation_sec": gen_per_item,
+                        "generation_sec": gen_sec,
                     }
 
         return results
@@ -637,25 +647,19 @@ class TTSEngine:
             text, instruct, ref_audio, speed, ref_text=ref_text
         )
 
-        if os.path.exists(path):
-            data, sr = sf.read(path)
-            if len(data) > 0:
-                return {
-                    "audio_path": path,
-                    "duration_sec": len(data) / sr,
-                    "cache_hit": True,
-                    "cache_key": key,
-                    "generation_sec": 0.0,
-                }
-            # 0-frame WAV from a previous failed synthesis — delete and re-synthesize
-            log.warning("Deleting zero-length cached WAV at %s, re-synthesizing", path)
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        cached = self._read_cached_wav(path)
+        if cached is not None:
+            data, sr = cached
+            return {
+                "audio_path": path,
+                "duration_sec": len(data) / sr,
+                "cache_hit": True,
+                "cache_key": key,
+                "generation_sec": 0.0,
+            }
 
         t0 = time.time()
-        audio = self._synthesize_audio(
+        audio = self._synthesize_one(
             text=text,
             instruct=effective_instruct,
             ref_audio=effective_ref_audio,
@@ -663,9 +667,6 @@ class TTSEngine:
             speed=speed,
             num_step=num_step,
         )
-        if len(audio) == 0:
-            log.warning("Zero-length audio for %r — using silence fallback", text[:50])
-            audio = np.zeros(int(0.3 * SAMPLE_RATE), dtype=np.float32)
         sf.write(path, audio, SAMPLE_RATE)
 
         return {

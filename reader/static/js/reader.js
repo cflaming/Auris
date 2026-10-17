@@ -437,8 +437,18 @@ function fetchSegmentData(idx) {
       if (!r.ok) return r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); });
       return r.json();
     }).then(data => {
-      // 0-duration means a bad cache entry — evict and re-fetch so the server re-synthesizes.
-      if (!data.duration_sec) { _segCache.delete(idx); return fetchSegmentData(idx); }
+      if (!data.duration_sec) {
+        // 0-duration means a bad cache entry — evict and fire one fresh request.
+        _segCache.delete(idx);
+        const retry = fetch('/api/tts/generate', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ book_id: BOOK_ID, chapter_id: currentChapterId, segment_index: idx }),
+        }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); }));
+        retry.catch(() => _segCache.delete(idx));
+        _segCache.set(idx, retry);
+        return retry;
+      }
       return data;
     });
     // Evict on failure so the next call retries rather than re-throwing the cached rejection.
