@@ -468,6 +468,10 @@ function _awaitSeek() {
   });
 }
 
+function _segDur(idx) {
+  return _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
+}
+
 function _teardownMSE({ keepSrc = false } = {}) {
   _sbReady = false;
   _mseNext = 0;
@@ -589,8 +593,7 @@ function _onSegmentChange(idx) {
   document.getElementById('pb-character').textContent = seg.character_name || 'Narrator';
   updatePlaybackUI();
   _updateMediaPosition(idx);
-  const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
-  startWordHighlight(idx, dur);
+  startWordHighlight(idx, _segDur(idx));
   _appendAhead(idx + 1, _mseGenId);
 }
 
@@ -707,8 +710,7 @@ async function _playSegmentChapterMode(idx, gen) {
   }
 
   charEl.textContent = charLabel;
-  const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
-  startWordHighlight(idx, dur);
+  startWordHighlight(idx, _segDur(idx));
   audio.playbackRate = speedMultiplier;
   if (audio.paused) await audio.play();
   if (gen !== _playGen) return true;
@@ -792,8 +794,7 @@ async function playSegment(idx) {
       }
 
       charEl.textContent = charLabel;
-      const dur = _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
-      startWordHighlight(idx, dur);
+      startWordHighlight(idx, _segDur(idx));
       audio.playbackRate = speedMultiplier;
       if (audio.paused) await audio.play();
       if (gen !== _playGen) return;
@@ -1598,8 +1599,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (correct !== currentSegIdx) {
     setCurrentSegment(correct, { highlight: true, save: false });
-    const dur = _segEnd[correct] !== undefined ? _segEnd[correct] - _segStart[correct] : 0;
-    startWordHighlight(correct, dur);
+    startWordHighlight(correct, _segDur(correct));
   }
 });
 
