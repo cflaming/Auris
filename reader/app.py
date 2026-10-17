@@ -62,6 +62,38 @@ DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 _export_jobs: dict = {}
 _chapter_prerender_jobs: dict = {}  # (book_id, chapter_id) -> job_id for in-progress renders
 
+# ── Seg-mode TTS activity tracker ────────────────────────────────────────────
+from collections import deque as _deque
+_tts_active: dict = {}
+_tts_recent = _deque(maxlen=60)
+_tts_lock = threading.Lock()
+_tts_req_id = 0
+
+
+def _tts_start(book_id, chapter_id, segment_index, character):
+    global _tts_req_id
+    with _tts_lock:
+        _tts_req_id += 1
+        rid = _tts_req_id
+        _tts_active[rid] = {
+            'book_id': book_id, 'chapter_id': chapter_id,
+            'segment_index': segment_index, 'character': character or 'Narrator',
+            'started_at': time.time(),
+        }
+    return rid
+
+
+def _tts_finish(rid, *, cached=False, duration_sec=None, error=None):
+    with _tts_lock:
+        entry = _tts_active.pop(rid, None)
+        if entry is None:
+            return
+        elapsed = time.time() - entry['started_at']
+        _tts_recent.append({**entry, 'elapsed': round(elapsed, 2),
+                             'cached': cached, 'duration_sec': duration_sec,
+                             'error': error})
+
+
 # Per-chapter locks prevent concurrent segment building from racing on the
 # DELETE + INSERT in _store_segments when multiple requests hit the same
 # chapter before segments are built (e.g. parallel prewarm requests).
@@ -271,6 +303,94 @@ def _ensure_chapter_segments(book_id: int, chapter_id: int):
 def library_page():
     return render_template('library.html')
 
+
+@app.route('/debug/jobs')
+def debug_jobs_page():
+    return render_template('debug_jobs.html')
+
+
+@app.route('/debug/chapter-cache')
+def debug_chapter_cache():
+    book_id   = request.args.get('book_id',   type=int)
+    chapter_id = request.args.get('chapter_id', type=int)
+    with get_conn() as conn:
+        books = [dict(r) for r in conn.execute(
+            'SELECT id, title FROM books ORDER BY title').fetchall()]
+        chapters = []
+        segs     = []
+        if book_id:
+            chapters = [dict(r) for r in conn.execute(
+                'SELECT id, title FROM chapters WHERE book_id=? ORDER BY order_num',
+                (book_id,)).fetchall()]
+        if book_id and chapter_id:
+            segs = [dict(r) for r in conn.execute(
+                '''SELECT segment_index, character_name, text,
+                          audio_path, duration_sec, cache_key
+                   FROM tts_segments
+                   WHERE book_id=? AND chapter_id=?
+                   ORDER BY segment_index''',
+                (book_id, chapter_id)).fetchall()]
+
+    # annotate with actual file existence
+    for s in segs:
+        s['file_ok'] = bool(s.get('audio_path') and os.path.exists(s['audio_path']))
+
+    # also check if a prerender exists
+    prerender_cached = False
+    prerender_info   = {}
+    if book_id and chapter_id:
+        fmp4   = _chapter_render_fmp4(book_id, chapter_id)
+        meta_p = _chapter_render_meta(book_id, chapter_id)
+        if os.path.exists(fmp4) and os.path.exists(meta_p):
+            import json
+            prerender_cached = True
+            try:
+                with open(meta_p) as f:
+                    m = json.load(f)
+                prerender_info = {
+                    'timeline_len': len(m.get('timeline', [])),
+                    'total_segments': m.get('total_segments'),
+                    'fmp4_size_mb': round(os.path.getsize(fmp4) / 1_048_576, 2),
+                }
+            except Exception:
+                pass
+
+    return jsonify({
+        'books': books,
+        'chapters': chapters,
+        'segments': segs,
+        'prerender_cached': prerender_cached,
+        'prerender_info': prerender_info,
+    })
+
+
+@app.route('/debug/jobs/data')
+def debug_jobs_data():
+    prerender = []
+    for (bid, cid), job_id in list(_chapter_prerender_jobs.items()):
+        job = _export_jobs.get(job_id, {})
+        prerender.append({**job, 'id': job_id,
+                          'chapter_label': f'book {bid} / chapter {cid}'})
+    seen_ids = {j['id'] for j in prerender}
+    exports = []
+    for job_id, job in list(_export_jobs.items()):
+        if job_id in seen_ids:
+            continue
+        exports.append({**job, 'id': job_id})
+    prerender.sort(key=lambda j: j['id'], reverse=True)
+    exports.sort(key=lambda j: j['id'], reverse=True)
+    with _tts_lock:
+        active = list(_tts_active.values())
+        recent = list(reversed(_tts_recent))
+    now = time.time()
+    for a in active:
+        a['elapsed'] = round(now - a['started_at'], 1)
+    return jsonify({
+        'prerender_jobs': prerender[:30],
+        'export_jobs': exports[:30],
+        'tts_active': active,
+        'tts_recent': recent,
+    })
 
 
 @app.route('/reader/<int:book_id>')
@@ -743,6 +863,8 @@ def tts_generate():
 
     seg = dict(seg)
     if seg.get('audio_path') and os.path.exists(seg['audio_path']):
+        rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
+        _tts_finish(rid, cached=True, duration_sec=seg['duration_sec'])
         return jsonify({
             'audio_url': f'/api/audio/{seg["cache_key"]}',
             'duration_sec': seg['duration_sec'],
@@ -763,6 +885,7 @@ def tts_generate():
     else:
         ref_audio = _book_narrator_ref_audio(book_id)
 
+    rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
     try:
         result = tts.generate(
             text=seg['enriched_text'],
@@ -771,6 +894,7 @@ def tts_generate():
             speed=seg['speed'],
         )
     except RuntimeError as e:
+        _tts_finish(rid, error=str(e))
         return jsonify({'error': str(e)}), 503
 
     with get_conn() as conn:
@@ -778,6 +902,8 @@ def tts_generate():
             'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=? WHERE id=?',
             (result['audio_path'], result['duration_sec'], result['cache_key'], seg['id'])
         )
+
+    _tts_finish(rid, cached=result['cache_hit'], duration_sec=result['duration_sec'])
     return jsonify({
         'audio_url': f'/api/audio/{result["cache_key"]}',
         'duration_sec': result['duration_sec'],

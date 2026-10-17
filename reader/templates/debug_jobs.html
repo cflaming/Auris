@@ -1,0 +1,241 @@
+{% extends "base.html" %}
+{% block title %}Jobs — Auris Debug{% endblock %}
+{% block content %}
+<style>
+  .dbg { max-width: 900px; margin: 24px auto; font-family: 'Courier New', monospace; font-size: 13px; }
+  .dbg h1 { font-size: 1.1rem; font-family: system-ui; margin-bottom: 16px; }
+  .dbg-meta { color: var(--text2); margin-bottom: 16px; font-family: system-ui; font-size: 12px; }
+  .job { border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin-bottom: 10px; }
+  .job-header { display: flex; gap: 12px; align-items: baseline; margin-bottom: 6px; }
+  .job-id { color: var(--text2); font-size: 11px; }
+  .job-state { font-weight: 600; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-family: system-ui; }
+  .job-state.running  { background: #1a4f2a; color: #4ade80; }
+  .job-state.complete { background: #1a3a4f; color: #60b8f8; }
+  .job-state.failed   { background: #4f1a1a; color: #f87171; }
+  .job-state.pending  { background: #3a3a1a; color: #fbbf24; }
+  .job-msg { color: var(--text2); font-size: 12px; }
+  .job-progress { margin-top: 4px; font-size: 12px; }
+  .job-bar { height: 4px; background: var(--border); border-radius: 2px; margin-top: 6px; overflow: hidden; }
+  .job-bar-fill { height: 100%; background: var(--accent); transition: width .3s; }
+  .job-ch  { font-size: 11px; color: var(--text2); margin-top: 4px; }
+  .empty   { color: var(--text2); text-align: center; padding: 40px; font-family: system-ui; }
+  .refresh-row { display: flex; gap: 10px; align-items: center; margin-bottom: 16px; font-family: system-ui; }
+  .section-title { font-family: system-ui; font-size: 12px; font-weight: 600; color: var(--text2);
+                   text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 8px; }
+</style>
+
+<div class="dbg">
+  <h1>Job Monitor</h1>
+  <div class="refresh-row">
+    <button class="btn btn-sm btn-ghost" id="refresh-btn" onclick="load()">Refresh</button>
+    <label style="display:flex;gap:6px;align-items:center">
+      <input type="checkbox" id="auto-cb" checked> Auto-refresh every
+    </label>
+    <select id="interval-sel" class="btn btn-sm btn-ghost" style="cursor:pointer">
+      <option value="2">2 s</option>
+      <option value="5" selected>5 s</option>
+      <option value="10">10 s</option>
+      <option value="30">30 s</option>
+    </select>
+    <span class="dbg-meta" id="last-updated"></span>
+  </div>
+
+  <div class="section-title">Chapter cache inspector</div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+    <select id="ci-book" class="btn btn-sm btn-ghost" style="cursor:pointer">
+      <option value="">— book —</option>
+    </select>
+    <select id="ci-chapter" class="btn btn-sm btn-ghost" style="cursor:pointer" disabled>
+      <option value="">— chapter —</option>
+    </select>
+    <span id="ci-summary" class="dbg-meta"></span>
+  </div>
+  <div id="ci-prerender" style="margin-bottom:8px"></div>
+  <div id="ci-segs" style="overflow-x:auto"></div>
+
+  <div class="section-title">TTS — active</div>
+  <div id="tts-active-list"></div>
+
+  <div class="section-title">TTS — recent <span id="tts-recent-label" style="font-weight:400;color:var(--text2)"></span></div>
+  <div id="tts-recent-list"></div>
+
+  <div class="section-title">Chapter prerenders</div>
+  <div id="prerender-list"></div>
+
+  <div class="section-title">Export &amp; other jobs</div>
+  <div id="export-list"></div>
+</div>
+
+<script>
+let _timer = null;
+
+function stateColor(s) {
+  return s === 'running' ? 'running' : s === 'complete' ? 'complete' : s === 'failed' ? 'failed' : 'pending';
+}
+
+function renderJob(j) {
+  const pct = j.total ? Math.round((j.done || 0) / j.total * 100) : null;
+  const bar = pct !== null
+    ? `<div class="job-bar"><div class="job-bar-fill" style="width:${pct}%"></div></div>
+       <div class="job-progress">${j.done ?? '?'} / ${j.total} segments (${pct}%)</div>`
+    : '';
+  const ch = j.chapter_label
+    ? `<div class="job-ch">Ch: ${escH(j.chapter_label)}</div>` : '';
+  const err = j.error ? `<div style="color:#f87171;margin-top:4px">${escH(j.error)}</div>` : '';
+  return `<div class="job">
+    <div class="job-header">
+      <span class="job-state ${stateColor(j.state)}">${j.state}</span>
+      <span>${escH(j.message || '')}</span>
+      <span class="job-id">${j.id}</span>
+    </div>
+    ${ch}${bar}${err}
+  </div>`;
+}
+
+function escH(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Chapter cache inspector ──────────────────────────────────────────────────
+
+async function ciLoadBooks() {
+  const d = await fetch('/debug/chapter-cache').then(r => r.json());
+  const sel = document.getElementById('ci-book');
+  sel.innerHTML = '<option value="">— book —</option>' +
+    d.books.map(b => `<option value="${b.id}">${escH(b.title)}</option>`).join('');
+}
+
+async function ciBookChange() {
+  const bookId = document.getElementById('ci-book').value;
+  const chSel  = document.getElementById('ci-chapter');
+  chSel.innerHTML = '<option value="">— chapter —</option>';
+  chSel.disabled  = true;
+  document.getElementById('ci-segs').innerHTML = '';
+  document.getElementById('ci-prerender').innerHTML = '';
+  document.getElementById('ci-summary').textContent = '';
+  if (!bookId) return;
+  const d = await fetch(`/debug/chapter-cache?book_id=${bookId}`).then(r => r.json());
+  chSel.innerHTML = '<option value="">— chapter —</option>' +
+    d.chapters.map(c => `<option value="${c.id}">${escH(c.title)}</option>`).join('');
+  chSel.disabled = false;
+}
+
+async function ciChapterChange() {
+  const bookId    = document.getElementById('ci-book').value;
+  const chapterId = document.getElementById('ci-chapter').value;
+  if (!bookId || !chapterId) return;
+  const d = await fetch(`/debug/chapter-cache?book_id=${bookId}&chapter_id=${chapterId}`)
+              .then(r => r.json());
+
+  const segs    = d.segments;
+  const cached  = segs.filter(s => s.file_ok).length;
+  const missing = segs.length - cached;
+  document.getElementById('ci-summary').textContent =
+    `${segs.length} segments · ${cached} cached · ${missing} missing`;
+
+  // prerender banner
+  const prEl = document.getElementById('ci-prerender');
+  if (d.prerender_cached) {
+    const pi = d.prerender_info;
+    const known    = pi.total_segments != null;
+    const complete = known && pi.timeline_len >= pi.total_segments;
+    const color    = complete ? '#4ade80' : known ? '#fbbf24' : '#60b8f8';
+    const label    = complete ? 'prerender ✓' : known ? `prerender incomplete (${pi.total_segments - pi.timeline_len} missing)` : 'prerender ✓ (old format)';
+    prEl.innerHTML = `<div class="job" style="padding:8px 14px;border-color:${color}20">
+      <span class="job-state" style="background:${color}20;color:${color}">${label}</span>
+      <span style="margin-left:10px;color:var(--text2)">
+        ${pi.timeline_len ?? '?'} / ${pi.total_segments ?? '?'} segs · ${pi.fmp4_size_mb} MB
+      </span>
+    </div>`;
+  } else {
+    prEl.innerHTML = `<div class="job" style="padding:8px 14px;color:var(--text2)">No prerender cached</div>`;
+  }
+
+  // segment table
+  const rows = segs.map(s => {
+    const ok   = s.file_ok;
+    const dot  = `<span style="color:${ok ? '#4ade80' : '#f87171'}">${ok ? '●' : '○'}</span>`;
+    const dur  = s.duration_sec ? s.duration_sec.toFixed(2) + 's' : '—';
+    const char = escH(s.character_name || 'Narrator');
+    const txt  = escH((s.text || '').slice(0, 60)) + ((s.text||'').length > 60 ? '…' : '');
+    return `<tr>
+      <td style="text-align:right;padding-right:10px;color:var(--text2)">${s.segment_index}</td>
+      <td style="padding-right:10px">${dot}</td>
+      <td style="padding-right:14px;white-space:nowrap">${char}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap">${dur}</td>
+      <td style="color:var(--text2)">${txt}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('ci-segs').innerHTML = rows
+    ? `<table style="border-collapse:collapse;width:100%;font-size:12px">${rows}</table>`
+    : '<div class="empty">No segments found</div>';
+}
+
+document.getElementById('ci-book').onchange    = ciBookChange;
+document.getElementById('ci-chapter').onchange = ciChapterChange;
+ciLoadBooks();
+
+// ── TTS rows ─────────────────────────────────────────────────────────────────
+
+function renderTtsRow(r, active) {
+  const seg  = `b${r.book_id} ch${r.chapter_id} seg${r.segment_index}`;
+  const char = escH(r.character || 'Narrator');
+  const t    = active ? `<span style="color:#fbbf24">${r.elapsed}s…</span>`
+                      : r.error  ? `<span style="color:#f87171">${escH(r.error)}</span>`
+                      : r.cached ? `<span style="color:var(--text2)">cached</span>`
+                      :            `<span style="color:#4ade80">${r.elapsed}s</span>`;
+  return `<div class="job" style="padding:8px 14px;display:flex;gap:12px;align-items:baseline">
+    <span style="color:var(--text2);min-width:160px">${seg}</span>
+    <span>${char}</span>
+    <span style="margin-left:auto">${t}</span>
+  </div>`;
+}
+
+async function load() {
+  try {
+    const d = await fetch('/debug/jobs/data').then(r => r.json());
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+
+    const actEl = document.getElementById('tts-active-list');
+    actEl.innerHTML = d.tts_active.length
+      ? d.tts_active.map(r => renderTtsRow(r, true)).join('')
+      : '<div class="empty">No active TTS requests</div>';
+
+    const recEl = document.getElementById('tts-recent-list');
+    const rec = d.tts_recent || [];
+    document.getElementById('tts-recent-label').textContent = rec.length ? `(${rec.length})` : '';
+    recEl.innerHTML = rec.length
+      ? rec.map(r => renderTtsRow(r, false)).join('')
+      : '<div class="empty">None yet</div>';
+
+    const preEl = document.getElementById('prerender-list');
+    preEl.innerHTML = d.prerender_jobs.length
+      ? d.prerender_jobs.map(renderJob).join('')
+      : '<div class="empty">No chapter prerenders in progress</div>';
+
+    const expEl = document.getElementById('export-list');
+    expEl.innerHTML = d.export_jobs.length
+      ? d.export_jobs.map(renderJob).join('')
+      : '<div class="empty">No export jobs</div>';
+  } catch(e) {
+    document.getElementById('last-updated').textContent = 'Error: ' + e.message;
+  }
+}
+
+function reschedule() {
+  clearInterval(_timer);
+  if (document.getElementById('auto-cb').checked) {
+    const secs = parseInt(document.getElementById('interval-sel').value, 10);
+    _timer = setInterval(load, secs * 1000);
+  }
+}
+
+document.getElementById('auto-cb').onchange = reschedule;
+document.getElementById('interval-sel').onchange = reschedule;
+
+load();
+reschedule();
+</script>
+{% endblock %}
