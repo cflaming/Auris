@@ -921,6 +921,28 @@ _audioB.addEventListener('ended', _onAudioEnded);
 _audioA.addEventListener('error', _onAudioError);
 _audioB.addEventListener('error', _onAudioError);
 
+// Re-sync segment after any native seek (e.g. iOS lock-screen controls that
+// seek the audio element directly without calling the mediaSession handlers).
+// Safe for programmatic seeks too: by the time 'seeked' fires, setCurrentSegment
+// has already updated currentSegIdx, so correct === currentSegIdx → no-op.
+function _onAudioSeeked(e) {
+  if (e.target !== audio) return;
+  if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
+  const t = audio.currentTime;
+  let correct = currentSegIdx;
+  for (let i = 0; i < segments.length; i++) {
+    if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
+    else if (_segStart[i] !== undefined) break;
+  }
+  if (correct !== currentSegIdx) {
+    setCurrentSegment(correct, { highlight: true, save: false });
+    startWordHighlight(correct, _segDur(correct));
+    _updateMediaPosition(correct);
+  }
+}
+_audioA.addEventListener('seeked', _onAudioSeeked);
+_audioB.addEventListener('seeked', _onAudioSeeked);
+
 function stopPlayback() {
   isPlaying = false;
   _playGen++;
@@ -1139,18 +1161,25 @@ function initMediaSession() {
   navigator.mediaSession.setActionHandler('pause', () => {
     if (isPlaying) { isPlaying = false; stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
   });
-  navigator.mediaSession.setActionHandler('seekbackward', (details) => {
+  // previoustrack/nexttrack are reliably fired on iOS; seekbackward/seekforward
+  // have limited iOS Safari support. Wire previous/next to ±10s time seek so
+  // the lock-screen << >> buttons replay/advance within the chapter.
+  const _seekBack = (details) => {
     if (!_seekToTime(audio.currentTime - (details?.seekOffset ?? 10))) {
       const prev = Math.max(currentSegIdx - 1, 0);
       if (isPlaying) playSegment(prev); else setCurrentSegment(prev, { highlight: true, save: true });
     }
-  });
-  navigator.mediaSession.setActionHandler('seekforward', (details) => {
+  };
+  const _seekFwd = (details) => {
     if (!_seekToTime(audio.currentTime + (details?.seekOffset ?? 10))) {
       const next = Math.min(currentSegIdx + 1, segments.length - 1);
       if (isPlaying) playSegment(next); else setCurrentSegment(next, { highlight: true, save: true });
     }
-  });
+  };
+  navigator.mediaSession.setActionHandler('previoustrack', _seekBack);
+  navigator.mediaSession.setActionHandler('nexttrack',     _seekFwd);
+  navigator.mediaSession.setActionHandler('seekbackward',  _seekBack);
+  navigator.mediaSession.setActionHandler('seekforward',   _seekFwd);
   navigator.mediaSession.setActionHandler('stop', () => stopPlayback());
 }
 
