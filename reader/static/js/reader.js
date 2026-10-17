@@ -461,6 +461,13 @@ function fetchSegmentData(idx) {
 
 // ── MSE helpers ───────────────────────────────────────────────────────────────
 
+function _awaitSeek() {
+  return new Promise(r => {
+    audio.addEventListener('seeked', r, { once: true });
+    audio.addEventListener('error',  r, { once: true });
+  });
+}
+
 function _teardownMSE({ keepSrc = false } = {}) {
   _sbReady = false;
   _mseNext = 0;
@@ -695,10 +702,7 @@ async function _playSegmentChapterMode(idx, gen) {
     }
     if (gen !== _playGen || !isPlaying) return true;
     audio.currentTime = start;
-    await new Promise(r => {
-      audio.addEventListener('seeked', r, { once: true });
-      audio.addEventListener('error',  r, { once: true });
-    });
+    await _awaitSeek();
     if (gen !== _playGen || !isPlaying) return true;
   }
 
@@ -782,10 +786,7 @@ async function playSegment(idx) {
                         audio.currentTime <  (_segEnd[idx] ?? start + 1);
         if (!inRange) {
           audio.currentTime = start;
-          await new Promise(r => {
-            audio.addEventListener('seeked', r, { once: true });
-            audio.addEventListener('error',  r, { once: true });
-          });
+          await _awaitSeek();
           if (gen !== _playGen || !isPlaying) return;
         }
       }
@@ -1590,8 +1591,10 @@ document.addEventListener('visibilitychange', () => {
   if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
   const t = audio.currentTime;
   let correct = currentSegIdx;
-  for (let i = 0; i < segments.length; i++) {
-    if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
+  for (let i = currentSegIdx + 1; i < segments.length; i++) {
+    const s = _segStart[i];
+    if (s === undefined || t < s) break;
+    correct = i;
   }
   if (correct !== currentSegIdx) {
     setCurrentSegment(correct, { highlight: true, save: false });
