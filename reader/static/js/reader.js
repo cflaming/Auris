@@ -272,6 +272,7 @@ async function openChapter(chapterId, options = {}) {
   _prewarmChapter();
 
   document.getElementById('chapter-content').scrollTop = 0;
+  window.scrollTo(0, 0);
 
   const startIdx = clampSegmentIndex(resumePosition);
   setCurrentSegment(startIdx, {
