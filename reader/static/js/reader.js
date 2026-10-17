@@ -58,6 +58,13 @@ let _preloadData = null;
 // bail out when their generation no longer matches the current one.
 let _playGen = 0;
 
+// ── Sleep timer ───────────────────────────────────────────────────────────────
+let _sleepTimerId       = null;  // setTimeout id
+let _sleepTimerEnd      = 0;     // absolute ms timestamp when timer fires (0 = off)
+let _sleepOnChapterEnd  = false; // stop at the next chapter boundary instead
+let _sleepTimerFired    = false; // set when timer fires; cleared by setSleepTimer / playSegment
+let _sleepCountdownId   = null;  // setInterval for the countdown display
+
 // Cancellation token for the background buffer loop — incremented on each
 // chapter open so the previous loop exits without touching the new chapter.
 let _bufferGenId = 0;
@@ -691,6 +698,7 @@ async function playSegment(idx) {
 
   const gen = ++_playGen;
   isPlaying = true;
+  _sleepTimerFired = false; // explicit play clears fired state so auto-advance works again
   updateMediaSession(true);
   setCurrentSegment(idx, { highlight: true, save: true });
 
@@ -809,10 +817,21 @@ function _preloadNextChapter() {
 }
 
 async function _advanceChapter() {
+  if (_sleepOnChapterEnd) {
+    _sleepOnChapterEnd = false;
+    _updateSleepTimerUI();
+    stopPlayback();
+    return;
+  }
   const idx = chapters.findIndex(c => c.id === currentChapterId);
   if (idx >= 0 && idx < chapters.length - 1) {
     await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
-    playSegment(0);
+    // Timer may have fired during openChapter's awaits — don't resume if so
+    if (_sleepTimerFired) {
+      _sleepTimerFired = false;
+    } else {
+      playSegment(0);
+    }
   } else {
     stopPlayback();
   }
@@ -1053,6 +1072,69 @@ function initMediaSession() {
   navigator.mediaSession.setActionHandler('stop', () => stopPlayback());
 }
 
+// ── Sleep timer ───────────────────────────────────────────────────────────────
+
+function setSleepTimer(minutes) {
+  // Clear any running timer first
+  if (_sleepTimerId)     { clearTimeout(_sleepTimerId);   _sleepTimerId = null; }
+  if (_sleepCountdownId) { clearInterval(_sleepCountdownId); _sleepCountdownId = null; }
+  _sleepTimerEnd     = 0;
+  _sleepOnChapterEnd = false;
+  _sleepTimerFired   = false;
+
+  if (minutes === 0) {
+    _updateSleepTimerUI();
+    return;
+  }
+  if (minutes < 0) {                     // special value: end of chapter
+    _sleepOnChapterEnd = true;
+  } else {
+    _sleepTimerEnd = Date.now() + minutes * 60_000;
+    _sleepTimerId  = setTimeout(_onSleepTimerFired, minutes * 60_000);
+    _sleepCountdownId = setInterval(_updateSleepTimerUI, 1000);
+  }
+  _updateSleepTimerUI();
+  document.getElementById('sleep-dropdown').classList.add('hidden');
+}
+
+function _onSleepTimerFired() {
+  _sleepTimerId = null;
+  _sleepTimerEnd = 0;
+  if (_sleepCountdownId) { clearInterval(_sleepCountdownId); _sleepCountdownId = null; }
+  _sleepTimerFired = true;
+  stopPlayback();
+  _updateSleepTimerUI();
+}
+
+function _updateSleepTimerUI() {
+  const btn = document.getElementById('sleep-btn');
+  if (!btn) return;
+  if (_sleepOnChapterEnd) {
+    btn.textContent = '☽ ch';
+    btn.classList.add('sleep-active');
+  } else if (_sleepTimerEnd > 0) {
+    const ms  = Math.max(0, _sleepTimerEnd - Date.now());
+    const m   = Math.floor(ms / 60_000);
+    const s   = Math.floor((ms % 60_000) / 1000);
+    btn.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    btn.classList.add('sleep-active');
+  } else {
+    btn.textContent = '☽';
+    btn.classList.remove('sleep-active');
+  }
+}
+
+document.getElementById('sleep-btn').onclick = () => {
+  document.getElementById('sleep-dropdown').classList.toggle('hidden');
+  document.getElementById('export-dropdown').classList.add('hidden');
+};
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.sleep-menu-wrap'))
+    document.getElementById('sleep-dropdown').classList.add('hidden');
+  if (!e.target.closest('.export-menu-wrap'))
+    document.getElementById('export-dropdown').classList.add('hidden');
+});
+
 // ── Controls ──────────────────────────────────────────────────────────────────
 
 document.getElementById('btn-play').onclick = () => {
@@ -1282,6 +1364,7 @@ function gotoBookmark(chapterId, segIdx) {
 
 document.getElementById('export-btn').onclick = () => {
   document.getElementById('export-dropdown').classList.toggle('hidden');
+  document.getElementById('sleep-dropdown').classList.add('hidden');
 };
 
 document.getElementById('do-export-btn').onclick = async () => {

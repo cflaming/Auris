@@ -81,6 +81,18 @@
     <span class="pb-label">Speed</span>
     <input id="speed-slider" type="range" min="0.5" max="2.0" step="0.1" value="1.0" class="pb-slider">
     <span id="speed-val" style="font-size:.75rem;color:var(--text2);font-family:'Courier New',monospace">1.0&#215;</span>
+    <div class="sleep-menu-wrap">
+      <button class="btn btn-sm btn-ghost" id="sleep-btn" title="Sleep timer">&#9789;</button>
+      <div class="sleep-dropdown hidden" id="sleep-dropdown">
+        <div class="sleep-dropdown-title">Sleep Timer</div>
+        <div class="sleep-option" onclick="setSleepTimer(0)">Off</div>
+        <div class="sleep-option" onclick="setSleepTimer(15)">15 min</div>
+        <div class="sleep-option" onclick="setSleepTimer(30)">30 min</div>
+        <div class="sleep-option" onclick="setSleepTimer(45)">45 min</div>
+        <div class="sleep-option" onclick="setSleepTimer(60)">1 hour</div>
+        <div class="sleep-option" onclick="setSleepTimer(-1)">End of chapter</div>
+      </div>
+    </div>
     <div class="export-menu-wrap">
       <button class="btn btn-sm btn-ghost" id="export-btn">&#8595; Export</button>
       <div class="export-dropdown hidden" id="export-dropdown">
