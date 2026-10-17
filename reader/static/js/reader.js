@@ -280,7 +280,7 @@ async function openChapter(chapterId, options = {}) {
   segs.forEach((s, i) => { if (s.duration_sec) _segDurations[i] = s.duration_sec; });
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
   renderContent(segments);
-  _prewarmChapter();
+  if (!_fullChapterMode) _prewarmChapter();
 
   document.getElementById('chapter-content').scrollTop = 0;
   window.scrollTo(0, 0);
@@ -291,7 +291,7 @@ async function openChapter(chapterId, options = {}) {
     behavior: 'auto',
     save: persistOpened,
   });
-  _startBackgroundBuffer(startIdx);
+  if (!_fullChapterMode) _startBackgroundBuffer(startIdx);
 }
 
 // ── Content rendering ─────────────────────────────────────────────────────────
