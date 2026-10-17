@@ -61,13 +61,18 @@
 <!-- Playback bar -->
 <div class="playback-bar" id="playback-bar">
   <div class="playback-left">
+    <button id="btn-prev-ch"  class="pb-btn" title="Previous chapter">&#10094;&#10094;</button>
     <button id="btn-prev-seg" class="pb-btn" title="Previous segment (&#8592;)">&#10094;</button>
     <button id="btn-play"     class="pb-btn pb-play paused" title="Play / Pause (Space)">&#9654;</button>
     <button id="btn-next-seg" class="pb-btn" title="Next segment (&#8594;)">&#10095;</button>
     <button id="btn-stop"     class="pb-btn" title="Stop">&#9632;</button>
+    <button id="btn-next-ch"  class="pb-btn" title="Next chapter">&#10095;&#10095;</button>
   </div>
   <div class="playback-center">
     <span id="pb-character" class="pb-character">&#8212;</span>
+    <div class="pb-seek-bar" id="pb-seek-bar" title="Seek">
+      <div class="pb-seek-fill" id="pb-seek-fill"></div>
+    </div>
     <span id="pb-progress"  class="pb-progress">0 / 0</span>
   </div>
   <div class="playback-right">

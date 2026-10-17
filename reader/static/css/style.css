@@ -605,6 +605,15 @@ body.theme-paper .voice-swatch[style] {
   font-family: 'Courier New', monospace; letter-spacing: 0.04em;
 }
 
+.pb-seek-bar {
+  flex: 1; height: 6px; background: var(--bg3); border-radius: 3px;
+  cursor: pointer; position: relative; min-width: 40px;
+}
+.pb-seek-fill {
+  height: 100%; background: var(--accent); border-radius: 3px;
+  width: 0%; pointer-events: none; transition: width .15s linear;
+}
+
 .pb-label { font-size: 0.72rem; color: var(--text3); }
 .pb-slider {
   width: 72px; accent-color: var(--accent);

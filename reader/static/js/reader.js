@@ -14,6 +14,7 @@ let lineHeight      = parseFloat(localStorage.getItem('lineHeight') || '1.9');
 let currentTheme    = localStorage.getItem('theme') || 'night';
 let showVoices      = localStorage.getItem('showVoices') !== '0';
 let charColors      = {};   // character name -> #RRGGBB
+let _segDurations   = {};   // segIdx -> duration_sec (accumulated as segments play)
 let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
@@ -225,6 +226,8 @@ async function openChapter(chapterId, options = {}) {
 
   const ch = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
   document.getElementById('chapter-title').textContent = ch.title;
+  _segDurations = {};
+  initMediaSession();
 
   const wpm = 250;
   const minutes = Math.round((ch.word_count || 0) / wpm);
@@ -440,6 +443,7 @@ async function playSegment(idx) {
   const gen = ++_playGen;
 
   isPlaying = true;
+  updateMediaSession(true);   // signal playing immediately, before any async gap
   setCurrentSegment(idx, { highlight: true, save: true });
 
   const seg = segments[idx];
@@ -466,9 +470,11 @@ async function playSegment(idx) {
       audio.src = data.audio_url;
     }
 
+    _segDurations[idx] = data.duration_sec;
     audio.playbackRate = speedMultiplier;
     startWordHighlight(idx, data.duration_sec);
     await audio.play();
+    _updateMediaPosition(idx);
 
     _schedulePreload(idx);
 
@@ -523,6 +529,10 @@ function stopPlayback() {
   btn.classList.add('paused');
   document.getElementById('pb-character').textContent = '—';
   updatePlaybackUI();
+  updateMediaSession(false);
+  if ('mediaSession' in navigator) {
+    try { navigator.mediaSession.setPositionState({}); } catch (_) {}
+  }
 }
 
 // ── Word-level highlighting ───────────────────────────────────────────────────
@@ -581,6 +591,7 @@ function updateProgress() {
 function updatePlaybackUI() {
   const btn  = document.getElementById('btn-play');
   const prog = document.getElementById('pb-progress');
+  const fill = document.getElementById('pb-seek-fill');
   if (isPlaying) {
     btn.innerHTML = '&#9646;&#9646;';
     btn.classList.remove('paused');
@@ -588,7 +599,69 @@ function updatePlaybackUI() {
     btn.innerHTML = '&#9654;';
     btn.classList.add('paused');
   }
-  if (segments.length) prog.textContent = `${currentSegIdx + 1} / ${segments.length}`;
+  if (segments.length) {
+    prog.textContent = `${currentSegIdx + 1} / ${segments.length}`;
+    if (fill) fill.style.width = `${((currentSegIdx + 1) / segments.length) * 100}%`;
+  }
+}
+
+// ── Media Session (lock-screen / notification controls) ───────────────────────
+
+function updateMediaSession(playing) {
+  if (!('mediaSession' in navigator)) return;
+  navigator.mediaSession.playbackState = playing ? 'playing' : 'paused';
+}
+
+function _updateMediaPosition(idx) {
+  if (!('mediaSession' in navigator)) return;
+  // Build position from known durations; unknown segments estimated at 0
+  let position = 0;
+  for (let i = 0; i < idx; i++) position += _segDurations[i] || 0;
+  // Total duration: sum of known durations + 0 for unknown future segments
+  let total = 0;
+  for (let i = 0; i < segments.length; i++) total += _segDurations[i] || 0;
+  if (total > 0) {
+    try {
+      navigator.mediaSession.setPositionState({
+        duration: total,
+        playbackRate: speedMultiplier,
+        position: Math.min(position, total),
+      });
+    } catch (_) {}
+  }
+}
+
+function initMediaSession() {
+  if (!('mediaSession' in navigator)) return;
+  const chTitle = document.getElementById('chapter-title')?.textContent || 'Chapter';
+  navigator.mediaSession.metadata = new MediaMetadata({
+    title: chTitle,
+    artist: document.querySelector('.book-title-short')?.textContent || '',
+    album: 'Auris',
+  });
+  navigator.mediaSession.setActionHandler('play', () => {
+    if (!isPlaying) playSegment(currentSegIdx);
+  });
+  navigator.mediaSession.setActionHandler('pause', () => {
+    if (isPlaying) { isPlaying = false; stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
+  });
+  navigator.mediaSession.setActionHandler('previoustrack', () => {
+    const idx = chapters.findIndex(c => c.id === currentChapterId);
+    if (idx > 0) openChapter(chapters[idx - 1].id);
+  });
+  navigator.mediaSession.setActionHandler('nexttrack', () => {
+    const idx = chapters.findIndex(c => c.id === currentChapterId);
+    if (idx >= 0 && idx < chapters.length - 1) openChapter(chapters[idx + 1].id);
+  });
+  navigator.mediaSession.setActionHandler('seekbackward', () => {
+    const prev = Math.max(currentSegIdx - 1, 0);
+    if (isPlaying) playSegment(prev); else setCurrentSegment(prev, { highlight: true, save: true });
+  });
+  navigator.mediaSession.setActionHandler('seekforward', () => {
+    const next = Math.min(currentSegIdx + 1, segments.length - 1);
+    if (isPlaying) playSegment(next); else setCurrentSegment(next, { highlight: true, save: true });
+  });
+  navigator.mediaSession.setActionHandler('stop', () => stopPlayback());
 }
 
 // ── Controls ──────────────────────────────────────────────────────────────────
@@ -621,6 +694,24 @@ document.getElementById('btn-prev-seg').onclick = () => {
   const prev = Math.max(currentSegIdx - 1, 0);
   if (isPlaying) playSegment(prev);
   else { setCurrentSegment(prev, { highlight: true, save: true }); }
+};
+
+document.getElementById('btn-prev-ch').onclick = () => {
+  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  if (idx > 0) openChapter(chapters[idx - 1].id);
+};
+document.getElementById('btn-next-ch').onclick = () => {
+  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  if (idx >= 0 && idx < chapters.length - 1) openChapter(chapters[idx + 1].id);
+};
+
+document.getElementById('pb-seek-bar').onclick = (e) => {
+  if (!segments.length) return;
+  const bar = e.currentTarget;
+  const frac = Math.max(0, Math.min(1, e.offsetX / bar.offsetWidth));
+  const targetIdx = Math.round(frac * (segments.length - 1));
+  if (isPlaying) playSegment(targetIdx);
+  else setCurrentSegment(targetIdx, { highlight: true, save: true });
 };
 
 document.getElementById('speed-slider').oninput = function() {
@@ -909,6 +1000,15 @@ document.addEventListener('visibilitychange', () => {
     flushProgressSave({ useBeacon: true, force: true });
   }
 });
+
+// iOS Safari blocks audio.play() called after an async gap from a gesture.
+// Unlock both audio elements on first touch so subsequent async plays work.
+document.addEventListener('touchstart', function _unlockAudio() {
+  [_audioA, _audioB].forEach(a => {
+    a.muted = true;
+    a.play().then(() => { a.pause(); a.currentTime = 0; a.muted = false; }).catch(() => { a.muted = false; });
+  });
+}, { once: true, passive: true });
 
 if (_topnav) {
   const _syncTopnavHeight = () => document.documentElement.style.setProperty('--topnav-height', _topnav.offsetHeight + 'px');
