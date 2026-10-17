@@ -196,7 +196,7 @@ def install_torch(hw_tag):
     elif hw_tag == "cpu":
         if offline_wheels_available():
             info("Local wheels found; using them before package indexes.")
-        pip_install("torch", "torchaudio")
+        pip_install("torch", "torchaudio", index_url="https://download.pytorch.org/whl/cpu")
     else:
         index_url = f"https://download.pytorch.org/whl/{hw_tag}"
         info(f"PyTorch index: {index_url}")
