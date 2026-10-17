@@ -64,6 +64,7 @@ let _sleepTimerEnd      = 0;     // absolute ms timestamp when timer fires (0 = 
 let _sleepOnChapterEnd  = false; // stop at the next chapter boundary instead
 let _sleepTimerFired    = false; // set when timer fires; cleared by setSleepTimer / playSegment
 let _sleepCountdownId   = null;  // setInterval for the countdown display
+let _autoAdvancing      = false; // true while _advanceChapter awaits openChapter; keeps OS lock-screen alive
 
 // Cancellation token for the background buffer loop — incremented on each
 // chapter open so the previous loop exits without touching the new chapter.
@@ -470,7 +471,7 @@ function _teardownMSE() {
     if (_ms.readyState === 'open') try { _ms.endOfStream(); } catch (_) {}
     _ms = null;
   }
-  audio.src = '';
+  if (!_autoAdvancing) audio.src = '';
   _segStart = {};
   _segEnd   = {};
   _chapterAudioChId    = null;
@@ -833,10 +834,22 @@ function _preloadNextChapter() {
 async function _advanceChapter() {
   const idx = chapters.findIndex(c => c.id === currentChapterId);
   if (idx >= 0 && idx < chapters.length - 1) {
-    await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
+    // Keep audio.src and media session alive across the chapter gap so the OS
+    // lock-screen notification doesn't disappear during the API fetches.
+    _autoAdvancing = true;
+    try {
+      await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
+    } finally {
+      _autoAdvancing = false;
+    }
     // Timer may have fired during openChapter's awaits — don't resume if so
     if (_sleepTimerFired) {
       _sleepTimerFired = false;
+      // Media session teardown was deferred above — clear it now
+      updateMediaSession(false);
+      if ('mediaSession' in navigator) {
+        try { navigator.mediaSession.setPositionState({}); } catch (_) {}
+      }
     } else {
       playSegment(0);
     }
@@ -900,8 +913,10 @@ function stopPlayback() {
   } else {
     _audioA.pause();
     _audioB.pause();
-    _audioA.src = '';
-    _audioB.src = '';
+    if (!_autoAdvancing) {
+      _audioA.src = '';
+      _audioB.src = '';
+    }
     audio = _audioA;
     _preloadIdx       = -1;
     _preloadData      = null;
@@ -916,9 +931,11 @@ function stopPlayback() {
   btn.classList.add('paused');
   document.getElementById('pb-character').textContent = '—';
   updatePlaybackUI();
-  updateMediaSession(false);
-  if ('mediaSession' in navigator) {
-    try { navigator.mediaSession.setPositionState({}); } catch (_) {}
+  if (!_autoAdvancing) {
+    updateMediaSession(false);
+    if ('mediaSession' in navigator) {
+      try { navigator.mediaSession.setPositionState({}); } catch (_) {}
+    }
   }
 }
 
