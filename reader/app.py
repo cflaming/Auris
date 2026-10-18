@@ -1086,8 +1086,9 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         except OSError: pass
 
         tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
+        duration_sec = tl[-1]['t_end'] if tl else 0
         with open(_chapter_render_meta(book_id, chapter_id), 'w') as f:
-            json.dump({'timeline': tl, 'total_segments': len(segs)}, f)
+            json.dump({'timeline': tl, 'total_segments': len(segs), 'duration_sec': duration_sec}, f)
 
         job['state'] = 'complete'
         job['message'] = 'Done'
@@ -1197,22 +1198,27 @@ def podcast_rss(book_id):
     for ch in chapters:
         fmp4 = _chapter_render_fmp4(book_id, ch['id'])
         meta_p = _chapter_render_meta(book_id, ch['id'])
-        if not os.path.exists(fmp4) or not os.path.exists(meta_p):
+        try:
+            fmp4_stat = os.stat(fmp4)
+        except FileNotFoundError:
+            continue
+        try:
+            with open(meta_p) as f:
+                meta = json.load(f)
+        except FileNotFoundError:
             continue
         episode_num += 1
 
-        size = os.path.getsize(fmp4)
-        with open(meta_p) as f:
-            meta = json.load(f)
+        size = fmp4_stat.st_size
         tl = meta.get('timeline', [])
-        duration_sec = max((s['t_end'] for s in tl), default=0)
+        duration_sec = meta.get('duration_sec') or (tl[-1]['t_end'] if tl else 0)
         h = int(duration_sec // 3600)
         m = int((duration_sec % 3600) // 60)
         s = int(duration_sec % 60)
         dur_str = f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
 
         audio_url = f'{base}/api/chapter-audio/{book_id}/{ch["id"]}'
-        pub_date = email.utils.formatdate(os.path.getmtime(fmp4))
+        pub_date = email.utils.formatdate(fmp4_stat.st_mtime)
 
         item = sub(channel, 'item')
         sub(item, 'title', ch['title'])

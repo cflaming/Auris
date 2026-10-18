@@ -96,13 +96,16 @@ function showRssFeed(e, id) {
 async function deleteBook(e, id) {
   e.stopPropagation();
   const btn = e.currentTarget;
-  if (btn.dataset.confirming) {
-    clearTimeout(Number(btn.dataset.timer));
-    delete btn.dataset.confirming;
-    delete btn.dataset.timer;
+  const resetBtn = () => {
     btn.innerHTML = trashIcon();
     btn.title = 'Remove book';
     btn.classList.remove('del-confirming');
+    delete btn.dataset.confirming;
+    delete btn.dataset.timer;
+  };
+  if (btn.dataset.confirming) {
+    clearTimeout(Number(btn.dataset.timer));
+    resetBtn();
     await fetch(`/api/books/${id}`, { method: 'DELETE' });
     loadBooks();
     return;
@@ -111,13 +114,7 @@ async function deleteBook(e, id) {
   btn.innerHTML = '<span style="font-size:.7rem;font-weight:600;letter-spacing:.01em">Sure?</span>';
   btn.title = 'Click again to confirm';
   btn.classList.add('del-confirming');
-  btn.dataset.timer = setTimeout(() => {
-    btn.innerHTML = trashIcon();
-    btn.title = 'Remove book';
-    btn.classList.remove('del-confirming');
-    delete btn.dataset.confirming;
-    delete btn.dataset.timer;
-  }, 3000);
+  btn.dataset.timer = setTimeout(resetBtn, 3000);
 }
 
 document.getElementById('file-input').addEventListener('change', async function() {
