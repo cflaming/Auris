@@ -3,6 +3,7 @@ Offline Ebook Reader — Flask application.
 """
 
 import base64
+import email.utils
 import json
 import logging
 import os
@@ -11,9 +12,10 @@ import threading
 import time
 import uuid
 import wave
+import xml.etree.ElementTree as ET
 
 from flask import (
-    Flask, jsonify, render_template, request,
+    Flask, Response, jsonify, render_template, request,
     send_file,
 )
 from werkzeug.utils import secure_filename
@@ -1151,6 +1153,78 @@ def serve_chapter_audio(book_id, chapter_id):
     if not os.path.exists(fmp4):
         return '', 404
     return send_file(fmp4, mimetype='audio/mp4')
+
+
+@app.route('/api/books/<int:book_id>/podcast.rss')
+def podcast_rss(book_id):
+    with get_conn() as conn:
+        book = conn.execute('SELECT * FROM books WHERE id=?', (book_id,)).fetchone()
+        if not book:
+            return '', 404
+        chapters = conn.execute(
+            'SELECT id, title FROM chapters WHERE book_id=? ORDER BY order_num',
+            (book_id,)
+        ).fetchall()
+
+    base = request.host_url.rstrip('/')
+    has_cover = bool(book['cover_b64'])
+
+    rss = ET.Element('rss', {
+        'version': '2.0',
+        'xmlns:itunes': 'http://www.itunes.com/dtds/podcast-1.0.dtd',
+    })
+    channel = ET.SubElement(rss, 'channel')
+
+    def sub(parent, tag, text=None, **attrib):
+        el = ET.SubElement(parent, tag, attrib)
+        if text is not None:
+            el.text = text
+        return el
+
+    sub(channel, 'title', book['title'])
+    sub(channel, 'description', f'{book["title"]} by {book["author"] or "Unknown"}')
+    sub(channel, 'link', f'{base}/reader/{book_id}')
+    sub(channel, 'language', book['language'] or 'en')
+    sub(channel, 'itunes:author', book['author'] or 'Unknown')
+    if has_cover:
+        sub(channel, 'itunes:image', href=f'{base}/api/books/{book_id}/cover')
+        img = sub(channel, 'image')
+        sub(img, 'url', f'{base}/api/books/{book_id}/cover')
+        sub(img, 'title', book['title'])
+        sub(img, 'link', f'{base}/reader/{book_id}')
+
+    episode_num = 0
+    for ch in chapters:
+        fmp4 = _chapter_render_fmp4(book_id, ch['id'])
+        meta_p = _chapter_render_meta(book_id, ch['id'])
+        if not os.path.exists(fmp4) or not os.path.exists(meta_p):
+            continue
+        episode_num += 1
+
+        size = os.path.getsize(fmp4)
+        with open(meta_p) as f:
+            meta = json.load(f)
+        tl = meta.get('timeline', [])
+        duration_sec = max((s['t_end'] for s in tl), default=0)
+        h = int(duration_sec // 3600)
+        m = int((duration_sec % 3600) // 60)
+        s = int(duration_sec % 60)
+        dur_str = f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
+
+        audio_url = f'{base}/api/chapter-audio/{book_id}/{ch["id"]}'
+        pub_date = email.utils.formatdate(os.path.getmtime(fmp4))
+
+        item = sub(channel, 'item')
+        sub(item, 'title', ch['title'])
+        sub(item, 'guid', audio_url)
+        sub(item, 'pubDate', pub_date)
+        sub(item, 'itunes:duration', dur_str)
+        sub(item, 'itunes:episode', str(episode_num))
+        sub(item, 'enclosure', url=audio_url, length=str(size), type='audio/mp4')
+
+    xml_bytes = ET.tostring(rss, encoding='unicode', xml_declaration=False)
+    body = '<?xml version="1.0" encoding="UTF-8"?>\n' + xml_bytes
+    return Response(body, mimetype='application/rss+xml; charset=utf-8')
 
 
 # ════════════════════════════════════════════════════════════════════════════

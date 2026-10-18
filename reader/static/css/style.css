@@ -317,13 +317,57 @@ code {
 }
 .book-actions a:hover { background: var(--accent); color: var(--bg); text-decoration: none; }
 .book-actions .del-btn {
-  background: transparent; color: var(--text3);
-  border: 1px solid var(--border);
+  flex: 0 0 auto; width: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(180,80,80,.08); color: #c88080;
+  border: 1px solid rgba(180,80,80,.25);
 }
 .book-actions .del-btn:hover {
-  background: rgba(180,80,80,.1); color: #c88080;
-  border-color: rgba(180,80,80,.3);
+  background: #c85050; color: var(--bg);
+  border-color: #c85050;
 }
+.book-actions .del-btn.del-confirming {
+  width: auto; padding: 0 8px;
+  background: #c85050; color: var(--bg);
+  border-color: #c85050;
+}
+.book-actions .rss-btn {
+  flex: 0 0 auto; width: 28px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(238,128,47,.08); color: #ee802f;
+  border: 1px solid rgba(238,128,47,.25);
+}
+.book-actions .rss-btn:hover {
+  background: #ee802f; color: var(--bg);
+  border-color: #ee802f;
+}
+.rss-popup {
+  display: none; position: fixed; z-index: 9999;
+  top: 50%; left: 50%; transform: translate(-50%, -50%);
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 8px; padding: 14px 16px;
+  width: min(380px, calc(100vw - 32px));
+  box-shadow: 0 4px 24px rgba(0,0,0,.45);
+}
+.rss-popup.visible { display: block; }
+.rss-popup-label {
+  font-size: 0.72rem; color: var(--text3); margin-bottom: 7px;
+}
+.rss-popup-row { display: flex; gap: 6px; }
+.rss-popup-url {
+  flex: 1; font-size: 0.72rem; padding: 5px 8px;
+  background: var(--bg); color: var(--text1);
+  border: 1px solid var(--border); border-radius: 4px;
+  font-family: var(--mono-font, monospace);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.rss-popup-copy {
+  padding: 5px 10px; font-size: 0.72rem; border-radius: 4px;
+  background: var(--accent-bg); color: var(--accent);
+  border: 1px solid var(--border); cursor: pointer;
+  white-space: nowrap; font-family: var(--ui-font);
+}
+.rss-popup-copy:hover { background: var(--accent); color: var(--bg); }
 
 .empty-library {
   text-align: center; padding: 80px 20px; color: var(--text2);
