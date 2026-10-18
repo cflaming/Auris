@@ -889,6 +889,9 @@ function _onAudioEnded(e) {
   // not the whole chapter.
   const wholeChapter = (_mseOk && _sbReady) || (_fullChapterMode && _chapterAudioChId === currentChapterId);
   if (wholeChapter) {
+    // Whole chapter played as one file; RAF was paused if screen was locked.
+    // Advance to the last segment before saving/stopping so unlock shows correct position.
+    currentSegIdx = segments.length - 1;
     queueProgressSave(currentChapterId, currentSegIdx);
     if (_sleepOnChapterEnd) { _sleepOnChapterEnd = false; _updateSleepTimerUI(); stopPlayback(); return; }
     _advanceChapter();
