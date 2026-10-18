@@ -1215,6 +1215,17 @@ function _onSleepTimerFired() {
   _clearSleepTimer();
   _sleepTimerEnd   = 0;
   _sleepTimerFired = true;
+  // Resync segment index before stopPlayback() clears audio.src / _segStart.
+  // The screen may have been locked while we counted down, so the RAF hasn't
+  // updated currentSegIdx; capture the real position now so unlock shows it.
+  if (_mseOk || _fullChapterMode) {
+    const t = audio.currentTime;
+    for (let i = currentSegIdx + 1; i < segments.length; i++) {
+      const s = _segStart[i];
+      if (s === undefined || t < s) break;
+      currentSegIdx = i;
+    }
+  }
   stopPlayback();
   _updateSleepTimerUI();
 }
