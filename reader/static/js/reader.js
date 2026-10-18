@@ -57,6 +57,7 @@ let _preloadData = null;
 // Each playSegment captures its generation at entry; stale async continuations
 // bail out when their generation no longer matches the current one.
 let _playGen = 0;
+let _seekingIntentionally = false; // suppress _onAudioSeeked during our own seeks
 
 // ── Sleep timer ───────────────────────────────────────────────────────────────
 let _sleepTimerId       = null;  // setTimeout id
@@ -704,6 +705,7 @@ async function _playSegmentChapterMode(idx, gen) {
       });
     }
     if (gen !== _playGen || !isPlaying) return true;
+    _seekingIntentionally = true;
     audio.currentTime = start;
     await _awaitSeek();
     if (gen !== _playGen || !isPlaying) return true;
@@ -787,6 +789,7 @@ async function playSegment(idx) {
         const inRange = audio.currentTime >= start &&
                         audio.currentTime <  (_segEnd[idx] ?? start + 1);
         if (!inRange) {
+          _seekingIntentionally = true;
           audio.currentTime = start;
           await _awaitSeek();
           if (gen !== _playGen || !isPlaying) return;
@@ -926,10 +929,12 @@ _audioB.addEventListener('error', _onAudioError);
 
 // Re-sync segment after any native seek (e.g. iOS lock-screen controls that
 // seek the audio element directly without calling the mediaSession handlers).
-// Safe for programmatic seeks too: by the time 'seeked' fires, setCurrentSegment
-// has already updated currentSegIdx, so correct === currentSegIdx → no-op.
+// Suppressed for our own seeks via _seekingIntentionally: MP4 keyframe snapping
+// can land slightly before the target _segStart, which would wrongly move
+// currentSegIdx back by one if we let the scan run.
 function _onAudioSeeked(e) {
   if (e.target !== audio) return;
+  if (_seekingIntentionally) { _seekingIntentionally = false; return; }
   if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
   const t = audio.currentTime;
   let correct = currentSegIdx;
@@ -1093,6 +1098,7 @@ function updatePlaybackUI() {
 function _seekToTime(targetTime) {
   if (!_mseOk && !_fullChapterMode) return false;
   const t = Math.max(0, Math.min(targetTime, audio.duration || targetTime));
+  _seekingIntentionally = true;
   audio.currentTime = t;
   let correct = 0;
   for (let i = 0; i < segments.length; i++) {
