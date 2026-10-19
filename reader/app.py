@@ -1156,6 +1156,15 @@ def serve_chapter_audio(book_id, chapter_id):
     return send_file(fmp4, mimetype='audio/mp4')
 
 
+def _chapter_pub_timestamp(added_at: str, order_num: int) -> float:
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.strptime(added_at, '%Y-%m-%d %H:%M:%S').replace(tzinfo=timezone.utc)
+    except (ValueError, TypeError):
+        dt = datetime.now(timezone.utc)
+    return dt.timestamp() + order_num * 60
+
+
 @app.route('/api/books/<int:book_id>/podcast.rss')
 def podcast_rss(book_id):
     with get_conn() as conn:
@@ -1163,7 +1172,7 @@ def podcast_rss(book_id):
         if not book:
             return '', 404
         chapters = conn.execute(
-            'SELECT id, title FROM chapters WHERE book_id=? ORDER BY order_num',
+            'SELECT id, title, order_num FROM chapters WHERE book_id=? ORDER BY order_num',
             (book_id,)
         ).fetchall()
 
@@ -1218,7 +1227,7 @@ def podcast_rss(book_id):
         dur_str = f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
 
         audio_url = f'{base}/api/chapter-audio/{book_id}/{ch["id"]}'
-        pub_date = email.utils.formatdate(fmp4_stat.st_mtime)
+        pub_date = email.utils.formatdate(_chapter_pub_timestamp(book['added_at'], ch['order_num']))
 
         item = sub(channel, 'item')
         sub(item, 'title', ch['title'])
