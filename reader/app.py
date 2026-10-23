@@ -86,6 +86,15 @@ _tts_active: dict = {}
 _tts_recent = _deque(maxlen=60)
 _tts_lock = threading.Lock()
 _tts_req_id = 0
+_chapter_order_cache: dict[int, int] = {}  # chapter_id → order_num within book
+
+
+def _chapter_order_num(chapter_id: int) -> int:
+    if chapter_id not in _chapter_order_cache:
+        with get_conn() as conn:
+            row = conn.execute('SELECT order_num FROM chapters WHERE id=?', (chapter_id,)).fetchone()
+        _chapter_order_cache[chapter_id] = row['order_num'] if row else chapter_id
+    return _chapter_order_cache[chapter_id]
 
 
 def _tts_start(book_id, chapter_id, segment_index, character):
@@ -94,7 +103,7 @@ def _tts_start(book_id, chapter_id, segment_index, character):
         _tts_req_id += 1
         rid = _tts_req_id
         _tts_active[rid] = {
-            'book_id': book_id, 'chapter_id': chapter_id,
+            'book_id': book_id, 'chapter_order': _chapter_order_num(chapter_id),
             'segment_index': segment_index, 'character': character or 'Narrator',
             'started_at': time.time(),
         }

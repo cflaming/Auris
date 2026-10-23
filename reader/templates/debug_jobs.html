@@ -180,7 +180,7 @@ ciLoadBooks();
 // ── TTS rows ─────────────────────────────────────────────────────────────────
 
 function renderTtsRow(r, active) {
-  const seg  = `b${r.book_id} ch${r.chapter_id} seg${r.segment_index}`;
+  const seg  = `b${r.book_id} ch${r.chapter_order} seg${r.segment_index}`;
   const char = escH(r.character || 'Narrator');
   const t    = active ? `<span style="color:#fbbf24">${r.elapsed}s…</span>`
                       : r.error  ? `<span style="color:#f87171">${escH(r.error)}</span>`
