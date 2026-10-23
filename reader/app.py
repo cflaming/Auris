@@ -1105,7 +1105,7 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         proc2 = subprocess.Popen(
             ['ffmpeg',
              '-f', 'f32le', '-ar', str(SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
-             '-c:a', 'aac', '-b:a', '128k',
+             '-c:a', 'aac', '-b:a', '128k', '-movflags', 'faststart',
              '-y', m4a_path],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
@@ -1189,13 +1189,12 @@ def serve_chapter_audio(book_id, chapter_id):
 def serve_podcast_audio(book_id, chapter_id):
     m4a = _chapter_render_m4a(book_id, chapter_id)
     if not os.path.exists(m4a):
-        # lazy repackage: copy AAC from fmp4 into standard container (no re-encode)
         import subprocess
         fmp4 = _chapter_render_fmp4(book_id, chapter_id)
         if not os.path.exists(fmp4):
             return '', 404
         proc = subprocess.run(
-            ['ffmpeg', '-i', fmp4, '-c:a', 'copy', '-y', m4a],
+            ['ffmpeg', '-i', fmp4, '-c:a', 'aac', '-b:a', '128k', '-movflags', 'faststart', '-y', m4a],
             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         if proc.returncode != 0:
