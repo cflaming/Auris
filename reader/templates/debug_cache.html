@@ -1,0 +1,153 @@
+{% extends "base.html" %}
+{% block title %}Chapter Cache — Auris Debug{% endblock %}
+{% block content %}
+<style>
+  .dbg { max-width: 900px; margin: 24px auto; font-family: 'Courier New', monospace; font-size: 13px; }
+  .dbg h1 { font-size: 1.1rem; font-family: system-ui; margin-bottom: 16px; }
+  .dbg-meta { color: var(--text2); font-family: system-ui; font-size: 12px; }
+  .dbg-nav  { font-family: system-ui; font-size: 12px; margin-bottom: 16px; }
+  .dbg-nav a { color: var(--accent); text-decoration: none; }
+  .dbg-nav a:hover { text-decoration: underline; }
+  .job { border: 1px solid var(--border); border-radius: 6px; padding: 12px 16px; margin-bottom: 10px; }
+  .job-state { font-weight: 600; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-family: system-ui; }
+  .empty { color: var(--text2); text-align: center; padding: 40px; font-family: system-ui; }
+  .section-title { font-family: system-ui; font-size: 12px; font-weight: 600; color: var(--text2);
+                   text-transform: uppercase; letter-spacing: .06em; margin: 20px 0 8px; }
+  .controls { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+</style>
+
+<div class="dbg">
+  <h1>Chapter Cache Inspector</h1>
+  <div class="dbg-nav">← <a href="/debug/jobs">Job Monitor</a></div>
+
+  <div class="controls">
+    <select id="ci-book" class="btn btn-sm btn-ghost" style="cursor:pointer">
+      <option value="">— book —</option>
+    </select>
+    <select id="ci-chapter" class="btn btn-sm btn-ghost" style="cursor:pointer" disabled>
+      <option value="">— chapter —</option>
+    </select>
+    <span id="ci-summary" class="dbg-meta"></span>
+  </div>
+  <div id="ci-prerender" style="margin-bottom:8px"></div>
+  <div id="ci-segs" style="overflow-x:auto"></div>
+</div>
+
+<script>
+function escH(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function getParams() {
+  const p = new URLSearchParams(location.search);
+  return { bookId: p.get('book_id') || '', chapterId: p.get('chapter_id') || '' };
+}
+
+function pushParams(bookId, chapterId) {
+  const p = new URLSearchParams();
+  if (bookId)    p.set('book_id', bookId);
+  if (chapterId) p.set('chapter_id', chapterId);
+  const qs = p.toString();
+  history.replaceState(null, '', qs ? '?' + qs : location.pathname);
+}
+
+async function ciLoadBooks() {
+  const d = await fetch('/debug/chapter-cache').then(r => r.json());
+  const sel = document.getElementById('ci-book');
+  const { bookId, chapterId } = getParams();
+  sel.innerHTML = '<option value="">— book —</option>' +
+    d.books.map(b => `<option value="${b.id}"${b.id == bookId ? ' selected' : ''}>${escH(b.title)}</option>`).join('');
+  if (bookId) {
+    await ciLoadChapters(bookId, chapterId);
+  }
+}
+
+async function ciLoadChapters(bookId, preselectChapterId) {
+  const chSel = document.getElementById('ci-chapter');
+  const d = await fetch(`/debug/chapter-cache?book_id=${bookId}`).then(r => r.json());
+  chSel.innerHTML = '<option value="">— chapter —</option>' +
+    d.chapters.map(c => `<option value="${c.id}"${c.id == preselectChapterId ? ' selected' : ''}>${escH(c.title)}</option>`).join('');
+  chSel.disabled = false;
+  if (preselectChapterId) {
+    await ciLoadSegments(bookId, preselectChapterId);
+  }
+}
+
+async function ciLoadSegments(bookId, chapterId) {
+  const d = await fetch(`/debug/chapter-cache?book_id=${bookId}&chapter_id=${chapterId}`).then(r => r.json());
+
+  const segs    = d.segments;
+  const cached  = segs.filter(s => s.file_ok).length;
+  const missing = segs.length - cached;
+  document.getElementById('ci-summary').textContent =
+    `${segs.length} segments · ${cached} cached · ${missing} missing`;
+
+  const prEl = document.getElementById('ci-prerender');
+  if (d.prerender_cached) {
+    const pi = d.prerender_info;
+    const known    = pi.total_segments != null;
+    const complete = known && pi.timeline_len >= pi.total_segments;
+    const color    = complete ? '#4ade80' : known ? '#fbbf24' : '#60b8f8';
+    const label    = complete ? 'prerender ✓' : known ? `prerender incomplete (${pi.total_segments - pi.timeline_len} missing)` : 'prerender ✓ (old format)';
+    prEl.innerHTML = `<div class="job" style="padding:8px 14px;border-color:${color}20">
+      <span class="job-state" style="background:${color}20;color:${color}">${label}</span>
+      <span style="margin-left:10px;color:var(--text2)">
+        ${pi.timeline_len ?? '?'} / ${pi.total_segments ?? '?'} segs · ${pi.fmp4_size_mb} MB
+      </span>
+    </div>`;
+  } else {
+    prEl.innerHTML = `<div class="job" style="padding:8px 14px;color:var(--text2)">No prerender cached</div>`;
+  }
+
+  const rows = segs.map(s => {
+    const ok  = s.file_ok;
+    const dot = `<span style="color:${ok ? '#4ade80' : '#f87171'}">${ok ? '●' : '○'}</span>`;
+    const dur = s.duration_sec ? s.duration_sec.toFixed(2) + 's' : '—';
+    const gen = s.generation_sec != null ? s.generation_sec.toFixed(2) + 's' : '—';
+    const rtf = (s.generation_sec != null && s.duration_sec)
+              ? (s.generation_sec / s.duration_sec).toFixed(2) + '×' : '—';
+    const char = escH(s.character_name || 'Narrator');
+    const txt  = escH((s.text || '').slice(0, 60)) + ((s.text||'').length > 60 ? '…' : '');
+    return `<tr>
+      <td style="text-align:right;padding-right:10px;color:var(--text2)">${s.segment_index}</td>
+      <td style="padding-right:10px">${dot}</td>
+      <td style="padding-right:14px;white-space:nowrap">${char}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="audio runtime">${dur}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="synthesis time">${gen}</td>
+      <td style="padding-right:14px;color:var(--text2);white-space:nowrap" title="real-time factor">${rtf}</td>
+      <td style="color:var(--text2)">${txt}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('ci-segs').innerHTML = rows
+    ? `<table style="border-collapse:collapse;width:100%;font-size:12px">${rows}</table>`
+    : '<div class="empty">No segments found</div>';
+}
+
+document.getElementById('ci-book').onchange = async function() {
+  const bookId = this.value;
+  const chSel  = document.getElementById('ci-chapter');
+  chSel.innerHTML = '<option value="">— chapter —</option>';
+  chSel.disabled  = true;
+  document.getElementById('ci-segs').innerHTML = '';
+  document.getElementById('ci-prerender').innerHTML = '';
+  document.getElementById('ci-summary').textContent = '';
+  pushParams(bookId, '');
+  if (bookId) await ciLoadChapters(bookId, '');
+};
+
+document.getElementById('ci-chapter').onchange = async function() {
+  const bookId    = document.getElementById('ci-book').value;
+  const chapterId = this.value;
+  pushParams(bookId, chapterId);
+  if (bookId && chapterId) await ciLoadSegments(bookId, chapterId);
+  else {
+    document.getElementById('ci-segs').innerHTML = '';
+    document.getElementById('ci-prerender').innerHTML = '';
+    document.getElementById('ci-summary').textContent = '';
+  }
+};
+
+ciLoadBooks();
+</script>
+{% endblock %}

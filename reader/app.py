@@ -313,6 +313,11 @@ def debug_jobs_page():
     return render_template('debug_jobs.html')
 
 
+@app.route('/debug/cache')
+def debug_cache_page():
+    return render_template('debug_cache.html')
+
+
 @app.route('/debug/chapter-cache')
 def debug_chapter_cache():
     book_id   = request.args.get('book_id',   type=int)
