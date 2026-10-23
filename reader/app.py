@@ -51,14 +51,16 @@ def _chapter_render_meta(book_id: int, chapter_id: int) -> str:
     return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.json')
 
 
+def _chapter_render_m4a(book_id: int, chapter_id: int) -> str:
+    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.m4a')
+
+
 def _clear_chapter_renders(book_id: int):
     import glob
-    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.fmp4')):
-        try: os.remove(p)
-        except OSError: pass
-    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.json')):
-        try: os.remove(p)
-        except OSError: pass
+    for ext in ('fmp4', 'm4a', 'json'):
+        for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.{ext}')):
+            try: os.remove(p)
+            except OSError: pass
 
 tts = TTSEngine()
 
@@ -1084,6 +1086,8 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
 
         job['message'] = 'Encoding audio...'
         import subprocess
+        raw = merged.tobytes()
+
         fmp4_path = _chapter_render_fmp4(book_id, chapter_id)
         proc = subprocess.Popen(
             ['ffmpeg',
@@ -1093,9 +1097,21 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
              '-y', fmp4_path],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
-        _, stderr = proc.communicate(merged.tobytes())
+        _, stderr = proc.communicate(raw)
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(proc.returncode, 'ffmpeg', stderr=stderr)
+
+        m4a_path = _chapter_render_m4a(book_id, chapter_id)
+        proc2 = subprocess.Popen(
+            ['ffmpeg',
+             '-f', 'f32le', '-ar', str(SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
+             '-c:a', 'aac', '-b:a', '128k',
+             '-y', m4a_path],
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        _, stderr2 = proc2.communicate(raw)
+        if proc2.returncode != 0:
+            raise subprocess.CalledProcessError(proc2.returncode, 'ffmpeg', stderr=stderr2)
 
         tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
         duration_sec = tl[-1]['t_end'] if tl else 0
@@ -1148,8 +1164,9 @@ def start_chapter_prerender(book_id, chapter_id):
 def delete_chapter_prerender(book_id, chapter_id):
     fmp4 = _chapter_render_fmp4(book_id, chapter_id)
     meta_p = _chapter_render_meta(book_id, chapter_id)
+    m4a = _chapter_render_m4a(book_id, chapter_id)
     removed = []
-    for p in (fmp4, meta_p):
+    for p in (fmp4, m4a, meta_p):
         try:
             if os.path.exists(p):
                 os.remove(p)
@@ -1166,6 +1183,24 @@ def serve_chapter_audio(book_id, chapter_id):
     if not os.path.exists(fmp4):
         return '', 404
     return send_file(fmp4, mimetype='audio/mp4')
+
+
+@app.route('/api/podcast-audio/<int:book_id>/<int:chapter_id>')
+def serve_podcast_audio(book_id, chapter_id):
+    m4a = _chapter_render_m4a(book_id, chapter_id)
+    if not os.path.exists(m4a):
+        # lazy repackage: copy AAC from fmp4 into standard container (no re-encode)
+        import subprocess
+        fmp4 = _chapter_render_fmp4(book_id, chapter_id)
+        if not os.path.exists(fmp4):
+            return '', 404
+        proc = subprocess.run(
+            ['ffmpeg', '-i', fmp4, '-c:a', 'copy', '-y', m4a],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        )
+        if proc.returncode != 0:
+            return '', 500
+    return send_file(m4a, mimetype='audio/mp4')
 
 
 def _chapter_pub_timestamp(added_at: str, order_num: int) -> float:
@@ -1230,12 +1265,16 @@ def podcast_rss(book_id):
             continue
         episode_num += 1
 
-        size = fmp4_stat.st_size
+        m4a = _chapter_render_m4a(book_id, ch['id'])
+        try:
+            size = os.stat(m4a).st_size
+        except FileNotFoundError:
+            size = fmp4_stat.st_size  # m4a not yet generated; use fmp4 size as hint
         tl = meta.get('timeline', [])
         duration_sec = meta.get('duration_sec') or (tl[-1]['t_end'] if tl else 0)
         dur_str = exporter._fmt_itunes_duration(duration_sec)
 
-        audio_url = f'{base}/api/chapter-audio/{book_id}/{ch["id"]}'
+        audio_url = f'{base}/api/podcast-audio/{book_id}/{ch["id"]}'
         pub_date = email.utils.formatdate(_chapter_pub_timestamp(book['added_at'], ch['order_num']))
 
         item = sub(channel, 'item')
