@@ -1070,7 +1070,6 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
 
         job['message'] = 'Encoding audio...'
         import subprocess
-        import numpy as np
         fmp4_path = _chapter_render_fmp4(book_id, chapter_id)
         proc = subprocess.Popen(
             ['ffmpeg',
@@ -1080,7 +1079,7 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
              '-y', fmp4_path],
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
-        _, stderr = proc.communicate(merged.astype(np.float32).tobytes())
+        _, stderr = proc.communicate(merged.tobytes())
         if proc.returncode != 0:
             raise subprocess.CalledProcessError(proc.returncode, 'ffmpeg', stderr=stderr)
 
@@ -1220,10 +1219,7 @@ def podcast_rss(book_id):
         size = fmp4_stat.st_size
         tl = meta.get('timeline', [])
         duration_sec = meta.get('duration_sec') or (tl[-1]['t_end'] if tl else 0)
-        h = int(duration_sec // 3600)
-        m = int((duration_sec % 3600) // 60)
-        s = int(duration_sec % 60)
-        dur_str = f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
+        dur_str = exporter._fmt_itunes_duration(duration_sec)
 
         audio_url = f'{base}/api/chapter-audio/{book_id}/{ch["id"]}'
         pub_date = email.utils.formatdate(_chapter_pub_timestamp(book['added_at'], ch['order_num']))
@@ -1260,18 +1256,20 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
         char = chars.get(seg['character_name'])
         return char.get('ref_audio_path') or None if char else narrator_ref
 
+    def _tick():
+        if job is not None:
+            job['done'] += 1
+
     items, pending_segs = [], []
     for seg in segs:
         if seg.get('audio_path') and os.path.exists(seg['audio_path']) and seg.get('duration_sec'):
-            if job is not None:
-                job['done'] = job.get('done', 0) + 1
+            _tick()
             continue
         if not seg.get('text'):  # section break — use shared silence, not TTS
             wav_path = _ensure_section_break_audio(seg)
             seg['audio_path'] = wav_path
             seg['duration_sec'] = _SILENCE_DURATION
-            if job is not None:
-                job['done'] = job.get('done', 0) + 1
+            _tick()
             continue
         items.append({'text': seg['enriched_text'], 'instruct': seg['instruct'],
                       'ref_audio': _ref_for(seg), 'speed': seg['speed']})
@@ -1280,11 +1278,7 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
     if not pending_segs:
         return
 
-    def _on_result():
-        if job is not None:
-            job['done'] = job.get('done', 0) + 1
-
-    results = tts.generate_batch(items, progress_cb=_on_result)
+    results = tts.generate_batch(items, progress_cb=_tick)
 
     for seg, result in zip(pending_segs, results):
         if result is None:

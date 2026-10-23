@@ -69,6 +69,13 @@ def _fmt_srt(seconds: float) -> str:
     return f'{h:02d}:{m:02d}:{s:02d},{ms:03d}'
 
 
+def _fmt_itunes_duration(seconds: float) -> str:
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    return f'{h}:{m:02d}:{s:02d}' if h else f'{m}:{s:02d}'
+
+
 # ── ASS subtitle builder ──────────────────────────────────────────────────────
 
 _ASS_HEADER = """\
@@ -151,12 +158,12 @@ def _merge_wavs(audio_paths: list[str]) -> np.ndarray:
     arrays = []
     for p in audio_paths:
         if p and os.path.exists(p):
-            data, _ = sf.read(p)
+            data, _ = sf.read(p, dtype='float32')
             if data.ndim > 1:
                 data = data.mean(axis=1)
             arrays.append(data)
-            arrays.append(np.zeros(int(SAMPLE_RATE * 0.25)))  # 250ms gap
-    return np.concatenate(arrays) if arrays else np.zeros(SAMPLE_RATE)
+            arrays.append(np.zeros(int(SAMPLE_RATE * 0.25), dtype=np.float32))
+    return np.concatenate(arrays) if arrays else np.zeros(SAMPLE_RATE, dtype=np.float32)
 
 
 # ── Segment timeline builder ──────────────────────────────────────────────────
