@@ -1059,7 +1059,6 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
 
         job['message'] = 'Merging audio...'
         from core.exporter import _merge_wavs, build_timeline, SAMPLE_RATE
-        import soundfile as sf
 
         timeline = build_timeline(segs)
         if not timeline:
@@ -1069,21 +1068,21 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
 
         merged = _merge_wavs([s['audio_path'] for s in timeline])
 
-        wav_path = _chapter_render_fmp4(book_id, chapter_id).replace('.fmp4', '.wav')
-        sf.write(wav_path, merged, SAMPLE_RATE)
-
         job['message'] = 'Encoding audio...'
         import subprocess
+        import numpy as np
         fmp4_path = _chapter_render_fmp4(book_id, chapter_id)
-        subprocess.run(
-            ['ffmpeg', '-i', wav_path,
-             '-c:a', 'aac', '-b:a', '128k', '-ac', '1',
+        proc = subprocess.Popen(
+            ['ffmpeg',
+             '-f', 'f32le', '-ar', str(SAMPLE_RATE), '-ac', '1', '-i', 'pipe:0',
+             '-c:a', 'aac', '-b:a', '128k',
              '-f', 'mp4', '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
              '-y', fmp4_path],
-            check=True, capture_output=True,
+            stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
-        try: os.remove(wav_path)
-        except OSError: pass
+        _, stderr = proc.communicate(merged.astype(np.float32).tobytes())
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, 'ffmpeg', stderr=stderr)
 
         tl = [{'idx': s['segment_index'], 't_start': s['t_start'], 't_end': s['t_end']} for s in timeline]
         duration_sec = tl[-1]['t_end'] if tl else 0
@@ -1281,7 +1280,11 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
     if not pending_segs:
         return
 
-    results = tts.generate_batch(items)
+    def _on_result():
+        if job is not None:
+            job['done'] = job.get('done', 0) + 1
+
+    results = tts.generate_batch(items, progress_cb=_on_result)
 
     for seg, result in zip(pending_segs, results):
         if result is None:
@@ -1298,8 +1301,6 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
                 seg['cache_key'] = result['cache_key']
             except Exception as e:
                 log.warning('Failed to save audio for segment %s: %s', seg.get('id'), e)
-        if job is not None:
-            job['done'] = job.get('done', 0) + 1
 
 
 def _get_char_colors(book_id):

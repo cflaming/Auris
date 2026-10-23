@@ -491,6 +491,7 @@ class TTSEngine:
         items: list[dict],
         batch_duration: float = 60.0,
         num_step: int = 32,
+        progress_cb=None,
     ) -> list[dict | None]:
         """Generate audio for multiple items using cache and true GPU batching.
 
@@ -524,6 +525,8 @@ class TTSEngine:
                 data, sr = cached
                 results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
                               "cache_hit": True, "cache_key": key, "generation_sec": 0.0}
+                if progress_cb is not None:
+                    progress_cb()
                 continue
             uncached.append((i, text, eff_instruct, eff_ref_audio, eff_ref_text, speed, key, path))
 
@@ -600,6 +603,8 @@ class TTSEngine:
                             }
                         except Exception as exc2:
                             log.warning("Individual synthesis also failed for item %d: %s", orig_idx, exc2)
+                        if progress_cb is not None:
+                            progress_cb()
                     continue
                 gen_per_item = round((time.time() - t0) / len(batch), 2)
                 for u, audio in zip(batch, audios):
@@ -622,6 +627,8 @@ class TTSEngine:
                         "cache_key": key,
                         "generation_sec": gen_sec,
                     }
+                    if progress_cb is not None:
+                        progress_cb()
 
         return results
 
