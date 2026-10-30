@@ -1218,7 +1218,7 @@ def podcast_rss(book_id):
         if not book:
             return '', 404
         chapters = conn.execute(
-            'SELECT id, title, order_num FROM chapters WHERE book_id=? ORDER BY order_num',
+            'SELECT id, title, order_num FROM chapters WHERE book_id=? ORDER BY order_num DESC',
             (book_id,)
         ).fetchall()
 
@@ -1249,7 +1249,6 @@ def podcast_rss(book_id):
         sub(img, 'title', book['title'])
         sub(img, 'link', f'{base}/reader/{book_id}')
 
-    episode_num = 0
     for ch in chapters:
         fmp4 = _chapter_render_fmp4(book_id, ch['id'])
         meta_p = _chapter_render_meta(book_id, ch['id'])
@@ -1262,7 +1261,6 @@ def podcast_rss(book_id):
                 meta = json.load(f)
         except FileNotFoundError:
             continue
-        episode_num += 1
 
         m4a = _chapter_render_m4a(book_id, ch['id'])
         try:
@@ -1281,7 +1279,7 @@ def podcast_rss(book_id):
         sub(item, 'guid', audio_url)
         sub(item, 'pubDate', pub_date)
         sub(item, 'itunes:duration', dur_str)
-        sub(item, 'itunes:episode', str(episode_num))
+        sub(item, 'itunes:episode', str(ch['order_num']))
         sub(item, 'enclosure', url=audio_url, length=str(size), type='audio/mp4')
 
     xml_bytes = ET.tostring(rss, encoding='unicode', xml_declaration=False)
