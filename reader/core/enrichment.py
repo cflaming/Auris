@@ -784,6 +784,7 @@ def enrich_chapter(
     narrator_instruct: str = "male, elderly, low pitch, british accent",
     single_narrator_mode: bool = False,
     chapter_title: str | None = None,
+    expression_tags: bool = True,
 ) -> list[dict]:
     """
     Return segment dicts used by playback and export.
@@ -828,15 +829,18 @@ def enrich_chapter(
                     instruct = character_map.get(character_name, {}).get("instruct") or narrator_instruct
                 else:
                     instruct = narrator_instruct
-                if is_whisper and (single_narrator_mode or character_name) and "whisper" not in instruct:
+                if expression_tags and is_whisper and (single_narrator_mode or character_name) and "whisper" not in instruct:
                     instruct = instruct + ", whisper"
 
                 # Only the part touching the attribution ("she laughed") sees it.
                 touches = (side == "after" and part_idx == len(parts) - 1) or (side == "before" and part_idx == 0)
                 context = attribution if touches else sentence
-                enriched, tag = _inject_tags(sentence, context, is_dialogue)
-                # Don't chain the same tag on back-to-back segments — it sounds repetitive.
-                if tag is not None and tag == last_tag:
+                if expression_tags:
+                    enriched, tag = _inject_tags(sentence, context, is_dialogue)
+                    # Don't chain the same tag on back-to-back segments — it sounds repetitive.
+                    if tag is not None and tag == last_tag:
+                        enriched, tag = sentence, None
+                else:
                     enriched, tag = sentence, None
                 last_tag = tag
                 speed = _segment_speed(sentence, is_dialogue, scene_speed, tag, is_whisper)

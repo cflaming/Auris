@@ -114,6 +114,10 @@ def init_db():
             )
         if "narrator_ref_audio_path" not in cols:
             conn.execute("ALTER TABLE books ADD COLUMN narrator_ref_audio_path TEXT")
+        if "expression_tags" not in cols:
+            conn.execute(
+                "ALTER TABLE books ADD COLUMN expression_tags INTEGER DEFAULT 1"
+            )
 
         char_cols = {
             row["name"]

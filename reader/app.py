@@ -179,6 +179,13 @@ def _book_narrator_instruct(book: dict | None) -> str:
     return book.get('narrator_instruct') or _default_narrator_instruct()
 
 
+def _book_expression_tags(book: dict | None) -> bool:
+    if not book:
+        return True
+    v = book.get('expression_tags')
+    return v is None or bool(v)
+
+
 def _book_single_narrator_mode(book: dict | None) -> bool:
     if not book:
         return False
@@ -251,7 +258,7 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
             (book_id,)
         ).fetchall()
         book = conn.execute(
-            'SELECT narrator_instruct, single_narrator_mode FROM books WHERE id=?',
+            'SELECT narrator_instruct, single_narrator_mode, expression_tags FROM books WHERE id=?',
             (book_id,)
         ).fetchone()
 
@@ -259,12 +266,14 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
         return []
 
     char_map = _character_map(chars)
+    book_d = dict(book) if book else None
     segs = enrichment.enrich_chapter(
         ch['content'],
         char_map,
-        _book_narrator_instruct(dict(book) if book else None),
-        single_narrator_mode=_book_single_narrator_mode(dict(book) if book else None),
+        _book_narrator_instruct(book_d),
+        single_narrator_mode=_book_single_narrator_mode(book_d),
         chapter_title=ch['title'],
+        expression_tags=_book_expression_tags(book_d),
     )
     return segs
 
@@ -422,6 +431,7 @@ def voice_studio_page(book_id):
     book_data = dict(book)
     book_data['narrator_instruct'] = _book_narrator_instruct(book_data)
     book_data['single_narrator_mode'] = _book_single_narrator_mode(book_data)
+    book_data['expression_tags'] = _book_expression_tags(book_data)
     return render_template('voice_studio.html', book=book_data)
 
 
@@ -703,6 +713,7 @@ def get_narrator(book_id):
     return jsonify({
         'instruct': _book_narrator_instruct(book_data),
         'single_narrator_mode': _book_single_narrator_mode(book_data),
+        'expression_tags': _book_expression_tags(book_data),
     })
 
 
@@ -728,23 +739,33 @@ def update_narrator(book_id):
         single_narrator_mode = raw_mode.strip().lower() in {'1', 'true', 'yes', 'on'}
     else:
         single_narrator_mode = bool(raw_mode)
+
+    prev_expression_tags = _book_expression_tags(book_data)
+    raw_expr = body.get('expression_tags', prev_expression_tags)
+    if isinstance(raw_expr, str):
+        expression_tags = raw_expr.strip().lower() in {'1', 'true', 'yes', 'on'}
+    else:
+        expression_tags = bool(raw_expr)
+
     narrator_changed = instruct != _book_narrator_instruct(book_data)
     mode_changed = single_narrator_mode != _book_single_narrator_mode(book_data)
+    expr_changed = expression_tags != prev_expression_tags
 
     with get_conn() as conn:
         conn.execute(
-            'UPDATE books SET narrator_instruct=?, single_narrator_mode=? WHERE id=?',
-            (instruct, int(single_narrator_mode), book_id)
+            'UPDATE books SET narrator_instruct=?, single_narrator_mode=?, expression_tags=? WHERE id=?',
+            (instruct, int(single_narrator_mode), int(expression_tags), book_id)
         )
 
-    if narrator_changed or mode_changed:
+    if narrator_changed or mode_changed or expr_changed:
         _clear_book_tts_segments(book_id)
 
     return jsonify({
         'ok': True,
         'instruct': instruct,
         'single_narrator_mode': single_narrator_mode,
-        'segments_cleared': narrator_changed or mode_changed,
+        'expression_tags': expression_tags,
+        'segments_cleared': narrator_changed or mode_changed or expr_changed,
     })
 
 

@@ -51,6 +51,13 @@
           <div class="studio-note">
             When enabled, playback and export use the narrator voice for every line.
           </div>
+          <label class="narrator-mode-row">
+            <input type="checkbox" id="expression-tags">
+            <span>Expression tags (sighs, laughter, emphasis)</span>
+          </label>
+          <div class="studio-note">
+            When disabled, the model reads text plainly without injected non-verbal cues.
+          </div>
           <div class="char-card-footer">
             <span class="instruct-preview" id="narrator-instruct-preview"></span>
             <button class="btn btn-sm btn-ghost preview-btn" data-char-id="narrator">&#9654; Preview</button>
@@ -93,6 +100,7 @@
 <script>window.BOOK_ID = {{ book.id }};</script>
 <script>window.NARRATOR_INSTRUCT = {{ book.narrator_instruct|tojson }};</script>
 <script>window.SINGLE_NARRATOR_MODE = {{ 1 if book.single_narrator_mode else 0 }};</script>
+<script>window.EXPRESSION_TAGS = {{ 1 if book.expression_tags else 0 }};</script>
 <script>window.NARRATOR_HAS_REF_AUDIO = {{ 1 if book.narrator_ref_audio_path else 0 }};</script>
 <script src="/static/js/voice_studio.js"></script>
 {% endblock %}

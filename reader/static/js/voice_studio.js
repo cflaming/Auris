@@ -2,6 +2,7 @@ const BOOK_ID = window.BOOK_ID;
 const NARRATOR_INSTRUCT = window.NARRATOR_INSTRUCT || "";
 const DEFAULT_NARRATOR_INSTRUCT = "male, elderly, low pitch, british accent";
 let singleNarratorMode = Boolean(window.SINGLE_NARRATOR_MODE);
+let expressionTags = Boolean(window.EXPRESSION_TAGS);
 let narratorHasRefAudio = Boolean(window.NARRATOR_HAS_REF_AUDIO);
 const previewAudio = document.getElementById("preview-audio");
 
@@ -144,6 +145,15 @@ function initNarratorControls() {
     toggle.addEventListener("change", () => {
       singleNarratorMode = toggle.checked;
       syncSingleNarratorUI();
+      if (narratorSaveBtn) narratorSaveBtn.disabled = false;
+    });
+  }
+
+  const exprToggle = document.getElementById("expression-tags");
+  if (exprToggle) {
+    exprToggle.checked = expressionTags;
+    exprToggle.addEventListener("change", () => {
+      expressionTags = exprToggle.checked;
       if (narratorSaveBtn) narratorSaveBtn.disabled = false;
     });
   }
@@ -349,11 +359,12 @@ async function saveNarrator() {
   const r = await fetch(`/api/books/${BOOK_ID}/narrator`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instruct, single_narrator_mode: singleNarratorMode }),
+    body: JSON.stringify({ instruct, single_narrator_mode: singleNarratorMode, expression_tags: expressionTags }),
   });
   const d = await r.json();
   if (d.ok) {
     singleNarratorMode = Boolean(d.single_narrator_mode);
+    expressionTags = Boolean(d.expression_tags);
     syncSingleNarratorUI();
     flashSaved(document.getElementById("narrator-instruct-preview"));
     const saveBtn = document.getElementById("narrator-save-btn");
