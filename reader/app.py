@@ -383,6 +383,110 @@ def debug_chapter_cache():
     })
 
 
+@app.route('/debug/orphans')
+def debug_orphans_page():
+    return render_template('debug_orphans.html')
+
+
+def _scan_orphans() -> dict:
+    import re
+    from core.tts_engine import AUDIO_CACHE_DIR
+
+    # --- known cache keys from DB ---
+    with get_conn() as conn:
+        known_keys = {
+            row[0]
+            for row in conn.execute('SELECT cache_key FROM tts_segments WHERE cache_key IS NOT NULL').fetchall()
+        }
+        known_book_ids = {
+            row[0]
+            for row in conn.execute('SELECT id FROM books').fetchall()
+        }
+        known_chapter_ids = {
+            row[0]
+            for row in conn.execute('SELECT id FROM chapters').fetchall()
+        }
+        dead_segs = [
+            dict(r) for r in conn.execute(
+                '''SELECT book_id, chapter_id, segment_index, audio_path
+                   FROM tts_segments
+                   WHERE audio_path IS NOT NULL'''
+            ).fetchall()
+            if not os.path.exists(r['audio_path'])
+        ]
+
+    # --- orphan WAVs: on disk but no matching cache_key in DB ---
+    orphan_wavs = []
+    for fname in os.listdir(AUDIO_CACHE_DIR):
+        if not fname.endswith('.wav'):
+            continue
+        key = fname[:-4]
+        if key not in known_keys:
+            fpath = os.path.join(AUDIO_CACHE_DIR, fname)
+            try:
+                size = os.path.getsize(fpath)
+            except OSError:
+                size = 0
+            orphan_wavs.append({'filename': fname, 'path': fpath, 'size_bytes': size})
+
+    # --- orphan chapter renders: b{book}_c{chapter}.* with unknown ids ---
+    render_pattern = re.compile(r'^b(\d+)_c(\d+)\.')
+    orphan_renders = []
+    seen_render_keys = set()
+    for fname in os.listdir(_CHAPTER_RENDER_DIR):
+        m = render_pattern.match(fname)
+        if not m:
+            continue
+        bid, cid = int(m.group(1)), int(m.group(2))
+        reason = None
+        if bid not in known_book_ids:
+            reason = f'book {bid} not in DB'
+        elif cid not in known_chapter_ids:
+            reason = f'chapter {cid} not in DB'
+        if reason:
+            fpath = os.path.join(_CHAPTER_RENDER_DIR, fname)
+            try:
+                size = os.path.getsize(fpath)
+            except OSError:
+                size = 0
+            key = f'b{bid}_c{cid}'
+            orphan_renders.append({'filename': fname, 'path': fpath, 'size_bytes': size, 'reason': reason, '_key': key})
+
+    # deduplicate by (book,chapter) for display — keep all files but show each row
+    total_orphan_bytes = (
+        sum(r['size_bytes'] for r in orphan_wavs) +
+        sum(r['size_bytes'] for r in orphan_renders)
+    )
+
+    return {
+        'orphan_wavs': orphan_wavs,
+        'orphan_renders': orphan_renders,
+        'dead_segments': dead_segs,
+        'total_orphan_bytes': total_orphan_bytes,
+    }
+
+
+@app.route('/debug/orphans/data')
+def debug_orphans_data():
+    return jsonify(_scan_orphans())
+
+
+@app.route('/debug/orphans/cleanup', methods=['POST'])
+def debug_orphans_cleanup():
+    data = _scan_orphans()
+    deleted = 0
+    freed = 0
+    for r in data['orphan_wavs'] + data['orphan_renders']:
+        try:
+            size = r['size_bytes']
+            os.remove(r['path'])
+            deleted += 1
+            freed += size
+        except OSError:
+            pass
+    return jsonify({'deleted_files': deleted, 'freed_bytes': freed})
+
+
 @app.route('/debug/jobs/data')
 def debug_jobs_data():
     prerender = []

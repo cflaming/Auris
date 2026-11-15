@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}Orphan Inspector — Auris Debug{% endblock %}
+{% block content %}
+<style>
+  .dbg { max-width: 900px; margin: 24px auto; font-family: 'Courier New', monospace; font-size: 13px; }
+  .dbg h1 { font-size: 1.1rem; font-family: system-ui; margin-bottom: 4px; }
+  .dbg-nav  { font-family: system-ui; font-size: 12px; margin-bottom: 16px; }
+  .dbg-nav a { color: var(--accent); text-decoration: none; }
+  .dbg-nav a:hover { text-decoration: underline; }
+  .dbg-meta { color: var(--text2); font-family: system-ui; font-size: 12px; }
+  .section-title { font-family: system-ui; font-size: 12px; font-weight: 600; color: var(--text2);
+                   text-transform: uppercase; letter-spacing: .06em; margin: 24px 0 8px; }
+  .summary-row { display: flex; gap: 24px; flex-wrap: wrap; margin-bottom: 20px; font-family: system-ui; }
+  .stat { background: var(--surface2); border-radius: 8px; padding: 12px 18px; min-width: 140px; }
+  .stat-val { font-size: 1.5rem; font-weight: 700; line-height: 1; }
+  .stat-lbl { font-size: 11px; color: var(--text2); margin-top: 4px; }
+  .stat-warn { color: #f87171; }
+  .stat-ok   { color: #4ade80; }
+  .controls  { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { padding: 4px 10px 4px 0; vertical-align: top; white-space: nowrap; }
+  th { color: var(--text2); font-weight: 600; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  td.text-col { white-space: normal; max-width: 320px; word-break: break-all; color: var(--text2); }
+  .empty { color: var(--text2); font-family: system-ui; padding: 16px 0; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px; font-family: system-ui; }
+  .badge-warn { background: #f8717120; color: #f87171; }
+  .badge-ok   { background: #4ade8020; color: #4ade80; }
+  #scan-btn, #cleanup-btn { font-family: system-ui; }
+  #cleanup-btn:disabled { opacity: 0.4; cursor: default; }
+</style>
+
+<div class="dbg">
+  <h1>Orphan Inspector</h1>
+  <div class="dbg-nav">← <a href="/debug/cache">Chapter Cache</a> · <a href="/debug/jobs">Job Monitor</a></div>
+
+  <div class="controls">
+    <button id="scan-btn" class="btn btn-sm btn-ghost" onclick="scan()">Scan now</button>
+    <button id="cleanup-btn" class="btn btn-sm btn-primary" onclick="cleanup()" disabled>Delete orphans</button>
+    <span id="status" class="dbg-meta"></span>
+  </div>
+
+  <div id="summary-row" class="summary-row" style="display:none!important"></div>
+
+  <div id="results"></div>
+</div>
+
+<script>
+function escH(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function fmtSize(bytes) {
+  if (bytes == null) return '—';
+  if (bytes >= 1073741824) return (bytes / 1073741824).toFixed(2) + ' GB';
+  if (bytes >= 1048576)    return (bytes / 1048576).toFixed(1) + ' MB';
+  if (bytes >= 1024)       return (bytes / 1024).toFixed(0) + ' KB';
+  return bytes + ' B';
+}
+
+let lastData = null;
+
+async function scan() {
+  const btn = document.getElementById('scan-btn');
+  const st  = document.getElementById('status');
+  btn.disabled = true;
+  st.textContent = 'Scanning…';
+  document.getElementById('cleanup-btn').disabled = true;
+  try {
+    const d = await fetch('/debug/orphans/data').then(r => r.json());
+    lastData = d;
+    render(d);
+    st.textContent = `Scanned ${new Date().toLocaleTimeString()}`;
+    const hasOrphans = d.orphan_wavs.length || d.orphan_renders.length;
+    document.getElementById('cleanup-btn').disabled = !hasOrphans;
+  } catch (e) {
+    st.textContent = 'Scan failed: ' + e;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function cleanup() {
+  if (!confirm('Delete all orphaned files? This cannot be undone.')) return;
+  const btn = document.getElementById('cleanup-btn');
+  const st  = document.getElementById('status');
+  btn.disabled = true;
+  st.textContent = 'Deleting…';
+  try {
+    const d = await fetch('/debug/orphans/cleanup', { method: 'POST' }).then(r => r.json());
+    const freed = fmtSize(d.freed_bytes);
+    st.textContent = `Deleted ${d.deleted_files} files, freed ${freed}`;
+    await scan();
+  } catch (e) {
+    st.textContent = 'Cleanup failed: ' + e;
+    btn.disabled = false;
+  }
+}
+
+function stat(val, lbl, warn) {
+  const cls = warn && val > 0 ? 'stat-warn' : 'stat-ok';
+  return `<div class="stat"><div class="stat-val ${cls}">${val}</div><div class="stat-lbl">${lbl}</div></div>`;
+}
+
+function render(d) {
+  const sumRow = document.getElementById('summary-row');
+  sumRow.style.removeProperty('display');
+  sumRow.innerHTML =
+    stat(d.orphan_wavs.length,    'orphan WAV segments', true) +
+    stat(d.orphan_renders.length, 'orphan chapter renders', true) +
+    stat(d.dead_segments.length,  'DB rows / missing file', true) +
+    `<div class="stat">
+       <div class="stat-val">${fmtSize(d.total_orphan_bytes)}</div>
+       <div class="stat-lbl">reclaimable</div>
+     </div>`;
+
+  let html = '';
+
+  // --- Orphan WAVs ---
+  html += `<div class="section-title">Orphan WAV segments (${d.orphan_wavs.length})</div>`;
+  if (!d.orphan_wavs.length) {
+    html += '<div class="empty">None — all WAV files have a matching DB row.</div>';
+  } else {
+    const totalSize = d.orphan_wavs.reduce((s, r) => s + (r.size_bytes || 0), 0);
+    html += `<div class="dbg-meta" style="margin-bottom:8px">Total: ${fmtSize(totalSize)}</div>`;
+    html += '<table><thead><tr><th>Filename</th><th>Size</th></tr></thead><tbody>';
+    html += d.orphan_wavs.map(r =>
+      `<tr><td class="text-col">${escH(r.filename)}</td><td>${fmtSize(r.size_bytes)}</td></tr>`
+    ).join('');
+    html += '</tbody></table>';
+  }
+
+  // --- Orphan chapter renders ---
+  html += `<div class="section-title">Orphan chapter renders (${d.orphan_renders.length})</div>`;
+  if (!d.orphan_renders.length) {
+    html += '<div class="empty">None — all render files have a matching book/chapter in the DB.</div>';
+  } else {
+    const totalSize = d.orphan_renders.reduce((s, r) => s + (r.size_bytes || 0), 0);
+    html += `<div class="dbg-meta" style="margin-bottom:8px">Total: ${fmtSize(totalSize)}</div>`;
+    html += '<table><thead><tr><th>Filename</th><th>Size</th><th>Reason</th></tr></thead><tbody>';
+    html += d.orphan_renders.map(r =>
+      `<tr>
+        <td class="text-col">${escH(r.filename)}</td>
+        <td>${fmtSize(r.size_bytes)}</td>
+        <td><span class="badge badge-warn">${escH(r.reason)}</span></td>
+       </tr>`
+    ).join('');
+    html += '</tbody></table>';
+  }
+
+  // --- Dead segment rows ---
+  html += `<div class="section-title">DB rows with missing audio file (${d.dead_segments.length})</div>`;
+  if (!d.dead_segments.length) {
+    html += '<div class="empty">None — all DB rows with an audio_path point to an existing file.</div>';
+  } else {
+    html += `<div class="dbg-meta" style="margin-bottom:8px">These rows reference files that no longer exist on disk. They will re-generate on next playback.</div>`;
+    html += '<table><thead><tr><th>Book</th><th>Chapter</th><th>Seg</th><th>Path</th></tr></thead><tbody>';
+    html += d.dead_segments.map(r =>
+      `<tr>
+        <td>${escH(r.book_id)}</td>
+        <td>${escH(r.chapter_id)}</td>
+        <td>${escH(r.segment_index)}</td>
+        <td class="text-col">${escH(r.audio_path)}</td>
+       </tr>`
+    ).join('');
+    html += '</tbody></table>';
+  }
+
+  document.getElementById('results').innerHTML = html;
+}
+
+scan();
+</script>
+{% endblock %}
