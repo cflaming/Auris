@@ -1786,7 +1786,7 @@ def save_settings():
 
     # If model path changed, reset OmniVoice so it reloads from the new path
     # (model_path is meaningless to Kokoro).
-    if 'model_path' in updates and isinstance(tts, TTSEngine) and tts.engine_name == 'omnivoice':
+    if 'model_path' in updates and tts.engine_name == 'omnivoice':
         tts.model_path = updates['model_path']
         tts._ready = False
         tts._error = None

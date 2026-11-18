@@ -10,21 +10,25 @@ instruction-conditioned reference clip for each instruct string.
 import hashlib
 import logging
 import os
-import threading
 import time
 from pathlib import Path
 
 import numpy as np
 import soundfile as sf
 
+from core.base_engine import (  # noqa: F401  (AUDIO_CACHE_DIR re-exported for app.py)
+    AUDIO_CACHE_DIR,
+    SAMPLE_RATE,
+    BaseEngine,
+)
+from core.instruct import format_instruct, parse_instruct
+
 log = logging.getLogger(__name__)
 
 # Let ops without an Apple GPU (MPS) kernel run on CPU instead of raising.
 os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
-AUDIO_CACHE_DIR = str(Path(__file__).resolve().parent.parent / "audio_cache")
 VOICE_REF_DIR = os.path.join(AUDIO_CACHE_DIR, "voice_refs")
-SAMPLE_RATE = 24_000
 VOICE_DESIGN_REF_TEXT = (
     "Hello. This is a stable voice sample for conditioning. "
     "The room is quiet, the day is calm, and every word should sound clear, "
@@ -32,17 +36,6 @@ VOICE_DESIGN_REF_TEXT = (
 )
 VOICE_REF_MIN_ZCR = 0.015
 VOICE_REF_GEN_ATTEMPTS = 4
-_SILENCE_FALLBACK_FRAMES = int(0.3 * SAMPLE_RATE)
-VOICE_GENDERS = {"male", "female"}
-VOICE_AGES = {"child", "teenager", "young adult", "middle-aged", "elderly"}
-VOICE_PITCHES = {
-    "very low pitch",
-    "low pitch",
-    "moderate pitch",
-    "high pitch",
-    "very high pitch",
-}
-VOICE_STYLES = {"whisper"}
 
 
 def _model_path_from_settings() -> str:
@@ -54,55 +47,15 @@ def _model_path_from_settings() -> str:
         return str(Path(__file__).resolve().parent.parent.parent / "model_backup" / "OmniVoice")
 
 
-def _parse_instruct(instruct: str) -> dict:
-    parsed = {
-        "gender": None,
-        "age": None,
-        "pitch": None,
-        "accent": None,
-        "styles": [],
-        "extras": [],
-    }
-
-    for raw in str(instruct or "").split(","):
-        item = raw.strip().lower()
-        if not item:
-            continue
-        if item in VOICE_GENDERS:
-            parsed["gender"] = item
-        elif item in VOICE_AGES:
-            parsed["age"] = item
-        elif item in VOICE_PITCHES:
-            parsed["pitch"] = item
-        elif item in VOICE_STYLES:
-            parsed["styles"].append(item)
-        elif item.endswith("accent"):
-            parsed["accent"] = item
-        else:
-            parsed["extras"].append(item)
-
-    return parsed
-
-
-def _format_instruct(parts: dict) -> str | None:
-    items = []
-    for key in ("gender", "age", "pitch", "accent"):
-        if parts.get(key):
-            items.append(parts[key])
-    items.extend(parts.get("styles", []))
-    items.extend(parts.get("extras", []))
-    return ", ".join(items) if items else None
-
-
 def _stabilize_voice_design_instruct(instruct: str | None) -> str | None:
     if not instruct:
         return instruct
 
-    parts = _parse_instruct(instruct)
+    parts = parse_instruct(instruct)
     gender = parts["gender"]
     age = parts["age"]
     pitch = parts["pitch"]
-    original = _format_instruct(parts)
+    original = format_instruct(parts)
 
     # OmniVoice docs note that some attribute combinations do not work well.
     # Empirically, male teenage/child prompts often collapse into squeals or
@@ -120,7 +73,7 @@ def _stabilize_voice_design_instruct(instruct: str | None) -> str | None:
         elif age == "teenager" and pitch == "low pitch":
             parts["pitch"] = "moderate pitch"
 
-    effective = _format_instruct(parts)
+    effective = format_instruct(parts)
     if effective != original:
         log.info("Stabilized voice instruct: '%s' -> '%s'", original, effective)
     return effective
@@ -133,54 +86,38 @@ def _audio_zcr(audio: np.ndarray) -> float:
     return float(np.mean(np.abs(np.diff(np.signbit(mono)))))
 
 
-class TTSEngine:
+class TTSEngine(BaseEngine):
     engine_name = "omnivoice"
 
     def __init__(self, model_path: str = ""):
+        super().__init__()
         self.model_path = model_path
         self.model = None
-        self._lock = threading.Lock()
-        self._loading = False
         self._downloading = False
-        self._ready = False
-        self._error: str | None = None
         self._voice_clone_prompts: dict = {}  # (path, mtime) -> VoiceClonePrompt
-        os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
         os.makedirs(VOICE_REF_DIR, exist_ok=True)
 
-    def status(self) -> dict:
-        resolved_path = self.model_path or _model_path_from_settings()
-        if self._error:
-            return {"state": "error", "message": self._error}
-        if self._ready:
-            return {"state": "ready"}
-        if self._loading:
-            info = {"state": "loading"}
-            if self._downloading:
-                from core.settings import download_state
+    def _loading_status(self) -> dict:
+        info = {"state": "loading"}
+        if self._downloading:
+            from core.settings import download_state
 
-                dl = download_state()
-                info["downloading"] = True
-                info["pct"] = dl.get("pct", 0)
-                info["message"] = dl.get("message", "Downloading model…")
-            return info
+            dl = download_state()
+            info["downloading"] = True
+            info["pct"] = dl.get("pct", 0)
+            info["message"] = dl.get("message", "Downloading model…")
+        return info
+
+    def _idle_status(self) -> dict:
+        resolved_path = self.model_path or _model_path_from_settings()
         return {
             "state": "not_loaded",
             "model_path": resolved_path,
             "model_exists": os.path.isdir(resolved_path),
         }
 
-    def load_async(self):
-        if self._ready or self._loading:
-            return
-        threading.Thread(target=self._load, daemon=True).start()
-
-    def reload(self):
-        with self._lock:
-            self._ready = False
-            self._error = None
-            self.model = None
-        self.load_async()
+    def _unload(self):
+        self.model = None
 
     def _load(self):
         with self._lock:
@@ -299,10 +236,6 @@ class TTSEngine:
         return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def cache_path(key: str) -> str:
-        return os.path.join(AUDIO_CACHE_DIR, f"{key}.wav")
-
-    @staticmethod
     def _voice_ref_key(instruct: str) -> str:
         return hashlib.md5(instruct.encode("utf-8")).hexdigest()
 
@@ -321,14 +254,6 @@ class TTSEngine:
             prompt = self.model.create_voice_clone_prompt(ref_audio, ref_text)
             self._voice_clone_prompts = {cache_key: prompt}  # evict stale entries on rebuild
         return prompt
-
-    @staticmethod
-    def _normalise_audio(audio) -> np.ndarray:
-        if not isinstance(audio, np.ndarray):
-            audio = np.array(audio)
-        if audio.ndim > 1:
-            audio = audio.mean(axis=0)
-        return audio
 
     def _synthesize_audio(
         self,
@@ -353,38 +278,6 @@ class TTSEngine:
 
         audio = audio_arrays[0] if isinstance(audio_arrays, list) else audio_arrays
         return self._normalise_audio(audio)
-
-    @staticmethod
-    def _read_cached_wav(path: str) -> tuple[np.ndarray, int] | None:
-        """Return (audio, sr) for a valid cached WAV, or None (deleting the file) if missing/zero-length."""
-        if not os.path.exists(path):
-            return None
-        if sf.info(path).frames == 0:
-            log.warning("Deleting zero-length cached WAV at %s, re-synthesizing", path)
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-            return None
-        return sf.read(path)
-
-    def _synthesize_one(
-        self, text: str, instruct: str | None, ref_audio: str | None,
-        ref_text: str | None, speed: float, num_step: int,
-    ) -> np.ndarray:
-        """Synthesise one item; returns a silence fallback if text is empty or model output is zero-length."""
-        if not text or not text.strip():
-            log.warning("Empty text passed to synthesis — using silence fallback")
-            return np.zeros(_SILENCE_FALLBACK_FRAMES, dtype=np.float32)
-        audio = self._synthesize_audio(
-            text=text, instruct=instruct, ref_audio=ref_audio,
-            ref_text=ref_text, speed=speed, num_step=num_step,
-        )
-        if len(audio) == 0:
-            log.warning("Zero-length audio for %r — using silence fallback", text[:50])
-            audio = np.zeros(_SILENCE_FALLBACK_FRAMES, dtype=np.float32)
-        return audio
-
     def _resolve_item(
         self,
         text: str,
@@ -629,73 +522,3 @@ class TTSEngine:
                         "generation_sec": gen_sec,
                     }
                     progress_cb()
-
-        return results
-
-    def generate(
-        self,
-        text: str,
-        instruct: str | None = None,
-        ref_audio: str | None = None,
-        ref_text: str | None = None,
-        speed: float = 1.0,
-        num_step: int = 32,
-    ) -> dict:
-        """
-        Returns:
-            {
-                audio_path: str,
-                duration_sec: float,
-                cache_hit: bool,
-                cache_key: str,
-            }
-        """
-        effective_instruct, effective_ref_audio, effective_ref_text, key, path = self._resolve_item(
-            text, instruct, ref_audio, speed, ref_text=ref_text
-        )
-
-        cached = self._read_cached_wav(path)
-        if cached is not None:
-            data, sr = cached
-            return {
-                "audio_path": path,
-                "duration_sec": len(data) / sr,
-                "cache_hit": True,
-                "cache_key": key,
-                "generation_sec": 0.0,
-            }
-
-        t0 = time.time()
-        audio = self._synthesize_one(
-            text=text,
-            instruct=effective_instruct,
-            ref_audio=effective_ref_audio,
-            ref_text=effective_ref_text,
-            speed=speed,
-            num_step=num_step,
-        )
-        sf.write(path, audio, SAMPLE_RATE)
-
-        return {
-            "audio_path": path,
-            "duration_sec": len(audio) / SAMPLE_RATE,
-            "cache_hit": False,
-            "cache_key": key,
-            "generation_sec": round(time.time() - t0, 2),
-        }
-
-    def generate_preview(
-        self,
-        instruct: str,
-        sample_text: str,
-        ref_audio: str | None = None,
-        ref_text: str | None = None,
-    ) -> dict:
-        return self.generate(
-            text=sample_text,
-            instruct=instruct,
-            ref_audio=ref_audio,
-            ref_text=ref_text,
-            speed=1.0,
-            num_step=24,
-        )

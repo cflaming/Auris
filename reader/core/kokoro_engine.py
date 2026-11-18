@@ -15,7 +15,8 @@ import re
 
 import numpy as np
 
-from core.tts_engine import TTSEngine, _parse_instruct
+from core.base_engine import BaseEngine
+from core.instruct import parse_instruct
 
 log = logging.getLogger(__name__)
 
@@ -40,7 +41,7 @@ _TAG_RE = re.compile(r"\[[A-Za-z][A-Za-z\- ]*\]")  # OmniVoice expression tags, 
 
 @functools.lru_cache(maxsize=256)
 def pick_voice(instruct: str | None) -> str:
-    parts = _parse_instruct(instruct or "")
+    parts = parse_instruct(instruct or "")
     gender = parts["gender"] or "female"
     british = "british" in (parts["accent"] or "") or "australian" in (parts["accent"] or "")
     pitch = parts["pitch"] or ""
@@ -55,28 +56,21 @@ def pick_voice(instruct: str | None) -> str:
     return pool[h % len(pool)]
 
 
-class KokoroEngine(TTSEngine):
+class KokoroEngine(BaseEngine):
     engine_name = "kokoro"
 
-    def __init__(self, model_path: str = ""):
-        super().__init__(model_path)
+    def __init__(self):
+        super().__init__()
         self._pipelines: dict = {}
 
-    def status(self) -> dict:
-        if self._error:
-            return {"state": "error", "message": self._error}
-        if self._ready:
-            return {"state": "ready"}
-        if self._loading:
-            return {"state": "loading", "message": "Loading Kokoro…"}
+    def _loading_status(self) -> dict:
+        return {"state": "loading", "message": "Loading Kokoro…"}
+
+    def _idle_status(self) -> dict:
         return {"state": "not_loaded", "model_path": KOKORO_REPO, "model_exists": True}
 
-    def reload(self):
-        with self._lock:
-            self._ready = False
-            self._error = None
-            self._pipelines = {}
-        self.load_async()
+    def _unload(self):
+        self._pipelines = {}
 
     def _pipeline(self, lang: str):
         return self._pipelines[lang]
@@ -126,17 +120,3 @@ class KokoroEngine(TTSEngine):
             chunks = [np.asarray(a, dtype=np.float32).reshape(-1)
                       for _, _, a in pipe(clean, voice=voice, speed=speed) if a is not None]
         return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
-
-    def generate_batch(self, items, batch_duration=60.0, num_step=32, progress_cb=None):
-        progress_cb = progress_cb or (lambda: None)
-        results = []
-        for item in items:
-            try:
-                results.append(self.generate(
-                    text=item["text"], instruct=item.get("instruct"),
-                    speed=float(item.get("speed") or 1.0)))
-            except Exception as exc:
-                log.warning("Kokoro synthesis failed: %s", exc)
-                results.append(None)
-            progress_cb()
-        return results
