@@ -437,6 +437,7 @@ code {
 /* Reader main area */
 .reader-main {
   flex: 1; display: flex; flex-direction: column; overflow: hidden;
+  container: reader / inline-size;   /* lets the margin feature ask how much room the reading area has */
 }
 
 .reader-toolbar {
@@ -480,7 +481,7 @@ code {
 .chapter-content::-webkit-scrollbar { width: 6px; }
 .chapter-content::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-.chapter-content p { margin-bottom: 1.4em; }
+.chapter-content p { margin-bottom: 1.4em; position: relative; }
 .chapter-content h1, .chapter-content h2, .chapter-content h3 {
   font-weight: normal; color: var(--text); margin: 2em 0 0.8em;
 }
@@ -545,6 +546,26 @@ body.theme-paper .sentence.overridden {
 /* Manually corrected speaker: the same underline, wavy — shown even with voices hidden. */
 .sentence.overridden,
 .show-voices .sentence.overridden[data-char] { text-decoration-style: wavy; }
+/* Speaker names in the left margin (toggle: G), at the sentence where each speaker's lines begin.
+   Needs room, so it only exists where the reading area is wide enough. The text box grows by the
+   gutter on both sides, which keeps the text column exactly where it was. The label is an
+   absolutely positioned ::before whose static position puts it level with that sentence. */
+.gutter-toggle { display: none; }
+@container reader (min-width: 1100px) {
+  .gutter-toggle { display: inline-flex; }
+  .chapter-content.show-gutter { max-width: 1100px; padding-left: 234px; padding-right: 234px; }
+  .chapter-content.show-gutter .sentence.speaker-start::before {
+    content: attr(data-char);
+    position: absolute; right: 100%; margin-right: 18px; width: 150px;
+    text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    font-variant: small-caps; letter-spacing: .05em;
+    color: var(--char-color, var(--text2));
+  }
+  body.theme-sepia .chapter-content.show-gutter .sentence.speaker-start::before,
+  body.theme-paper .chapter-content.show-gutter .sentence.speaker-start::before {
+    color: color-mix(in srgb, var(--char-color, var(--text2)) 60%, black);
+  }
+}
 .voice-legend {
   display: flex; flex-wrap: wrap; gap: 6px 14px;
   /* Line up with the centred 760px text column of .chapter-content */

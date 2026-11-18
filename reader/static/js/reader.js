@@ -18,6 +18,7 @@ let fontFamily      = localStorage.getItem('fontFamily') || 'serif';
 let lineHeight      = parseFloat(localStorage.getItem('lineHeight') || '1.9');
 let currentTheme    = localStorage.getItem('theme') || 'night';
 let showVoices      = localStorage.getItem('showVoices') !== '0';
+let showGutter      = localStorage.getItem('showGutter') !== '0';   // speaker names in the margin (wide windows)
 let charColors      = {};   // character name -> #RRGGBB
 
 // ── MSE (MediaSource Extensions) — primary audio path ────────────────────────
@@ -328,7 +329,7 @@ function renderContent(segs) {
     else paras.push({ para: seg.paragraph, items: [[seg, i]] });
   });
 
-  const renderSeg = (seg, i) => {
+  const renderSeg = (seg, i, startsRun = false) => {
     if (seg.text === '') {
       return `<span class="section-break" data-idx="${i}" onclick="jumpTo(${i})">* * *</span>`;
     }
@@ -343,15 +344,27 @@ function renderContent(segs) {
     const charAttr = name
       ? ` data-char="${esc(name)}"` + (color ? ` style="--char-color:${esc(color)}"` : '')
       : '';
-    const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '');
+    const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '')
+              + (startsRun ? ' speaker-start' : '');
     const tip = (name || 'Narrator') + (seg.overridden ? ' (corrected)' : '');
     return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
   };
 
-  const html = paras.map(p => `<p>${p.items.map(([seg, i]) => renderSeg(seg, i)).join('')}</p>`).join('');
+  // The margin names a speaker where their lines begin in a paragraph, not on every sentence.
+  const html = paras.map(p => {
+    let lastSpeaker = null;
+    const sentences = p.items.map(([seg, i]) => {
+      const name = seg.character_name;
+      const startsRun = !!name && name !== lastSpeaker;
+      if (name) lastSpeaker = name;
+      return renderSeg(seg, i, startsRun);
+    }).join('');
+    return `<p>${sentences}</p>`;
+  }).join('');
   container.innerHTML = `<div>${html}</div>`;
   renderVoiceLegend(segs);
   applyShowVoices();
+  applyShowGutter();
 
   // Restore font prefs (font may be reset by innerHTML)
   container.style.fontSize   = fontSize + 'px';
@@ -377,6 +390,18 @@ function applyShowVoices() {
   document.getElementById('chapter-content').classList.toggle('show-voices', showVoices);
   document.getElementById('voice-legend').hidden = !showVoices;
   document.getElementById('voices-btn').classList.toggle('active', showVoices);
+}
+
+function applyShowGutter() {
+  document.getElementById('chapter-content').classList.toggle('show-gutter', showGutter);
+  document.getElementById('gutter-btn').classList.toggle('active', showGutter);
+}
+
+function toggleGutter() {
+  showGutter = !showGutter;
+  localStorage.setItem('showGutter', showGutter ? '1' : '0');
+  applyShowGutter();
+  showToast(showGutter ? 'Speaker names in the margin' : 'Margin names hidden');
 }
 
 function toggleVoices() {
@@ -1649,6 +1674,9 @@ document.addEventListener('keydown', e => {
       break;
     case 'v': case 'V':
       toggleVoices();
+      break;
+    case 'g': case 'G':
+      toggleGutter();
       break;
     case 'e': case 'E':
       openSpeakerEditor();
