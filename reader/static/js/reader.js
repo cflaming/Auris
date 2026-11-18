@@ -3,8 +3,18 @@ const MOBILE_BREAKPOINT = 768;
 
 // ── State ─────────────────────────────────────────────────────────────────────
 let chapters        = [];
-let currentChapterId= null;
-let segments        = [];
+// Everything that belongs to the chapter being read. openChapter replaces the whole object, so
+// anything that captured the previous chapter (an in-flight request, the buffer loop) keeps
+// working on that one and can never write into the new chapter.
+//   id        the chapter's id
+//   segments  the stored segment list (see /api/tts/segments)
+//   cache     segIdx -> Promise<{audio_url, duration_sec, text, ...}>: the single source of truth
+//             for "this segment's audio is ready or being generated". Seeded from the segment list
+//             when the chapter opens (_seedAudioCache), filled as segments are generated
+//             (fetchSegmentData), emptied for audio that proves unusable (_forgetAudio). A segment
+//             absent from it still needs a request.
+//   durations segIdx -> duration_sec (accumulated as segments play)
+let chapter = { id: null, segments: [], cache: new Map(), durations: {} };
 let currentSegIdx   = 0;
 let isPlaying       = false;
 let speedMultiplier = parseFloat(localStorage.getItem('speedMultiplier') || '1.0');
@@ -14,7 +24,6 @@ let lineHeight      = parseFloat(localStorage.getItem('lineHeight') || '1.9');
 let currentTheme    = localStorage.getItem('theme') || 'night';
 let showVoices      = localStorage.getItem('showVoices') !== '0';
 let charColors      = {};   // character name -> #RRGGBB
-let _segDurations   = {};   // segIdx -> duration_sec (accumulated as segments play)
 
 // ── MSE (MediaSource Extensions) — primary audio path ────────────────────────
 // Falls back to WAV-per-segment if browser lacks MSE for AAC MP4.
@@ -48,13 +57,6 @@ let audio = _audioA; // currently active (playing) element
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-// Per-chapter record of segment audio: segIdx -> Promise<{audio_url, duration_sec, text, ...}>.
-// The single source of truth for "this segment's audio is ready or being generated":
-// seeded from the segment list when a chapter opens (_seedAudioCache), filled as segments
-// are generated (fetchSegmentData), and emptied for audio that turns out to be unusable
-// (_forgetAudio). A segment absent from it still needs a request.
-let _segCache = new Map();
-
 // Which segment index is pre-buffered in the standby element, and its data
 let _preloadIdx = -1;
 let _preloadData = null;
@@ -81,7 +83,7 @@ let _bufferWake = null;   // resolves the buffer loop's current sleep (see _kick
 function _standby() { return audio === _audioA ? _audioB : _audioA; }
 function _swapAudio() { audio = (audio === _audioA ? _audioB : _audioA); }
 
-function clampSegmentIndex(idx, segList = segments) {
+function clampSegmentIndex(idx, segList = chapter.segments) {
   const parsed = Number.parseInt(idx, 10);
   const safe = Number.isFinite(parsed) ? parsed : 0;
   const max = Math.max((segList?.length || 1) - 1, 0);
@@ -117,7 +119,7 @@ function sendProgress(chapterId, position, options = {}) {
   }).catch(() => {});
 }
 
-function queueProgressSave(chapterId = currentChapterId, position = currentSegIdx) {
+function queueProgressSave(chapterId = chapter.id, position = currentSegIdx) {
   if (!chapterId) return;
   clearTimeout(_progressSaveTimer);
   _progressSaveTimer = setTimeout(() => {
@@ -127,14 +129,14 @@ function queueProgressSave(chapterId = currentChapterId, position = currentSegId
 
 function flushProgressSave(options = {}) {
   clearTimeout(_progressSaveTimer);
-  if (currentChapterId) {
-    sendProgress(currentChapterId, currentSegIdx, options);
+  if (chapter.id) {
+    sendProgress(chapter.id, currentSegIdx, options);
   }
 }
 
 // The playback-bar label doubles as the "correct speaker" button.
 function updateSpeakerLabel() {
-  const seg = segments[currentSegIdx];
+  const seg = chapter.segments[currentSegIdx];
   document.getElementById('pb-character').textContent = seg && seg.text ? (seg.character_name || 'Narrator') : '—';
 }
 
@@ -149,7 +151,7 @@ function setCurrentSegment(idx, options = {}) {
   updatePlaybackUI();
   updateProgress();
   if (save) {
-    queueProgressSave(currentChapterId, currentSegIdx);
+    queueProgressSave(chapter.id, currentSegIdx);
   }
   return currentSegIdx;
 }
@@ -255,14 +257,14 @@ async function openChapter(chapterId, options = {}) {
     highlightOnLoad = false,
   } = options;
 
-  if (persistCurrent && currentChapterId && currentChapterId !== chapterId) {
-    sendProgress(currentChapterId, currentSegIdx, { force: true });
+  if (persistCurrent && chapter.id && chapter.id !== chapterId) {
+    sendProgress(chapter.id, currentSegIdx, { force: true });
   }
 
   stopPlayback();
-  _segCache = new Map();
-  segments = [];           // clear immediately so stale segments can't be played
-  currentChapterId = chapterId;
+  // A fresh object: nothing from the previous chapter can leak into this one, and its
+  // stale segments can't be played while this one loads.
+  const mine = chapter = { id: chapterId, segments: [], cache: new Map(), durations: {} };
   currentSegIdx    = 0;
 
   document.querySelectorAll('.toc-item').forEach(el => {
@@ -272,9 +274,8 @@ async function openChapter(chapterId, options = {}) {
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   const ch = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
-  if (chapterId !== currentChapterId) return;      // a newer open superseded this one: don't overwrite it
+  if (chapter !== mine) return;      // a newer open superseded this one: don't overwrite it
   document.getElementById('chapter-title').textContent = ch.title;
-  _segDurations = {};
   initMediaSession();
 
   const wpm = 250;
@@ -292,13 +293,13 @@ async function openChapter(chapterId, options = {}) {
     fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
     fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
   ]);
-  if (chapterId !== currentChapterId) return;
-  segments = segs;
+  if (chapter !== mine) return;
+  chapter.segments = segs;
   _seedAudioCache(segs);
   // Pre-populate durations from API data so resume-offset calculation is accurate
-  segs.forEach((s, i) => { if (s.duration_sec) _segDurations[i] = s.duration_sec; });
+  segs.forEach((s, i) => { if (s.duration_sec) chapter.durations[i] = s.duration_sec; });
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
-  renderContent(segments);
+  renderContent(chapter.segments);
 
   document.getElementById('chapter-content').scrollTop = 0;
   window.scrollTo(0, 0);
@@ -412,22 +413,22 @@ const _bufferIdle = () => new Promise(resolve => { _bufferWake = resolve; });
 
 async function _startBackgroundBuffer() {
   const myId = ++_bufferGenId;
-  const myChapterId = currentChapterId;
+  const mine = chapter;
   _kickBuffer();                                       // let a previous chapter's loop notice and exit
 
-  while (_bufferGenId === myId && currentChapterId === myChapterId) {
+  while (_bufferGenId === myId && chapter === mine) {
     // Look for work and go to sleep in the same step, so a wake-up can never slip in between.
     let next = -1;
     if (!isPlaying && !document.hidden) {              // while playing, playback preloads its own segments
-      const end = Math.min(segments.length, currentSegIdx + BUFFER_AHEAD + 1);
+      const end = Math.min(mine.segments.length, currentSegIdx + BUFFER_AHEAD + 1);
       for (let i = currentSegIdx; i < end; i++) {
-        if (!_segCache.has(i)) { next = i; break; }
+        if (!mine.cache.has(i)) { next = i; break; }
       }
     }
     if (next < 0) { await _bufferIdle(); continue; }
 
     try {
-      await fetchSegmentData(next);
+      await fetchSegmentData(next, mine);
       await sleep(100);                                // let the event loop breathe between generations
     } catch (_) {
       await sleep(BUFFER_RETRY_MS);                    // e.g. the model is still loading: don't hammer it
@@ -440,7 +441,7 @@ async function _startBackgroundBuffer() {
 function _seedAudioCache(segs) {
   segs.forEach((seg, idx) => {
     if (!seg.audio_url || !seg.duration_sec) return;       // audio_url is only sent for current audio
-    _segCache.set(idx, Promise.resolve({
+    chapter.cache.set(idx, Promise.resolve({
       audio_url: seg.audio_url, duration_sec: seg.duration_sec, text: seg.text,
       character_name: seg.character_name, is_dialogue: seg.is_dialogue, segment_index: idx, cached: true,
     }));
@@ -448,26 +449,25 @@ function _seedAudioCache(segs) {
 }
 
 // Audio that failed to load: forget it, so the next lookup asks the server (which regenerates it).
-function _forgetAudio(idx) {
-  _segCache.delete(idx);
+function _forgetAudio(idx, ch = chapter) {
+  ch.cache.delete(idx);
 }
 
-function fetchSegmentData(idx) {
-  const cache = _segCache, chapterId = currentChapterId;   // this chapter's (openChapter replaces _segCache)
-  if (!cache.has(idx)) {
+function fetchSegmentData(idx, ch = chapter) {          // ch: the chapter this request belongs to
+  if (!ch.cache.has(idx)) {
     const post = () => fetch('/api/tts/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ book_id: BOOK_ID, chapter_id: chapterId, segment_index: idx }),
+      body: JSON.stringify({ book_id: BOOK_ID, chapter_id: ch.id, segment_index: idx }),
     }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); }));
 
     // A 0-duration reply means a bad cache entry: ask once more for a fresh one.
     const p = post().then(d => d.duration_sec ? d : post());
     // Evict on failure so the next call retries rather than re-throwing the cached rejection.
-    p.catch(() => { if (cache.get(idx) === p) cache.delete(idx); });
-    cache.set(idx, p);
+    p.catch(() => { if (ch.cache.get(idx) === p) ch.cache.delete(idx); });
+    ch.cache.set(idx, p);
   }
-  return cache.get(idx);
+  return ch.cache.get(idx);
 }
 
 // ── MSE helpers ───────────────────────────────────────────────────────────────
@@ -564,26 +564,27 @@ let _appendChain = Promise.resolve(true);
 async function _fetchAndAppendSeg(idx, genId) {
   if (_mseGenId !== genId || !_sbReady) return false;
   if (_segStart[idx] !== undefined) return true;
+  const ch = chapter;
   let data, buf;
   try {
-    data = await fetchSegmentData(idx);
+    data = await fetchSegmentData(idx, ch);
     if (_mseGenId !== genId || !_sbReady) return false;
     const resp = await fetch(`${data.audio_url}/fmp4`);
     if (_mseGenId !== genId || !_sbReady) return false;
-    if (!resp.ok) { _forgetAudio(idx); return false; }   // e.g. the file was deleted: re-request next time
+    if (!resp.ok) { _forgetAudio(idx, ch); return false; }   // e.g. the file was deleted: re-request next time
     buf = await resp.arrayBuffer();
   } catch (_) { return false; }
 
-  const run = () => _appendSeg(idx, genId, data, buf);
+  const run = () => _appendSeg(idx, genId, data, buf, ch);
   return (_appendChain = _appendChain.then(run, run));
 }
 
-async function _appendSeg(idx, genId, data, buf) {
+async function _appendSeg(idx, genId, data, buf, ch) {
   if (_mseGenId !== genId || !_sbReady) return false;
   if (_segStart[idx] !== undefined) return true; // another caller appended it first
 
   _segStart[idx] = _mseNext;
-  _segDurations[idx] = data.duration_sec;
+  ch.durations[idx] = data.duration_sec;
 
   try { await _sbAppend(buf); }
   catch (_) { delete _segStart[idx]; return false; }
@@ -595,14 +596,14 @@ async function _appendSeg(idx, genId, data, buf) {
   _mseNext      = actualEnd;
 
   // Finalize stream after last segment
-  if (idx === segments.length - 1 && _ms?.readyState === 'open') {
+  if (idx === ch.segments.length - 1 && _ms?.readyState === 'open') {
     try { _ms.endOfStream(); } catch (_) {}
   }
   return true;
 }
 
 async function _appendAhead(fromIdx, genId) {
-  for (let i = fromIdx; i < Math.min(fromIdx + 3, segments.length); i++) {
+  for (let i = fromIdx; i < Math.min(fromIdx + 3, chapter.segments.length); i++) {
     if (_mseGenId !== genId) return;
     if (_segStart[i] !== undefined) continue;
     await _fetchAndAppendSeg(i, genId);
@@ -610,9 +611,9 @@ async function _appendAhead(fromIdx, genId) {
 }
 
 function _onSegmentChange(idx) {
-  if (idx >= segments.length) return;
+  if (idx >= chapter.segments.length) return;
   setCurrentSegment(idx, { highlight: true, save: false });
-  const seg = segments[idx];
+  const seg = chapter.segments[idx];
   document.getElementById('pb-character').textContent = seg.character_name || 'Narrator';
   updatePlaybackUI();
   _updateMediaPosition(idx);
@@ -623,14 +624,14 @@ function _onSegmentChange(idx) {
 async function _schedulePreload(playingIdx) {
   if (!isPlaying) return;
   const nextIdx = playingIdx + 1;
-  if (nextIdx >= segments.length) return;
+  if (nextIdx >= chapter.segments.length) return;
 
   // Fire N+1 first then N+2 so they arrive at the server TTS lock in the
   // correct order (N+1 queued before N+2).  Two-deep pipeline means a slow
   // TTS generation for N+1 overlaps with N-1's remaining play time *and*
   // N's full play time rather than just N's play time.
   fetchSegmentData(nextIdx);
-  if (nextIdx + 1 < segments.length) fetchSegmentData(nextIdx + 1);
+  if (nextIdx + 1 < chapter.segments.length) fetchSegmentData(nextIdx + 1);
 
   try {
     const data = await fetchSegmentData(nextIdx);
@@ -653,10 +654,10 @@ async function _schedulePreload(playingIdx) {
 // segment mode while the prerender continues in the background.
 async function _playSegmentChapterMode(idx, gen) {
   const charEl    = document.getElementById('pb-character');
-  const charLabel = segments[idx]?.character_name || 'Narrator';
+  const charLabel = chapter.segments[idx]?.character_name || 'Narrator';
 
-  if (_chapterAudioChId !== currentChapterId) {
-    const chId = currentChapterId;
+  if (_chapterAudioChId !== chapter.id) {
+    const chId = chapter.id;
 
     // Only POST once per chapter — avoid spawning a new GPU job on every segment
     // while falling back to WAV during the prerender.
@@ -685,7 +686,7 @@ async function _playSegmentChapterMode(idx, gen) {
     // Incomplete cache plays a truncated chapter and stalls the highlight.
     // Fall back to WAV segments and let the user ↺ regenerate.
     if (data.total_segments !== undefined && data.timeline.length < data.total_segments) {
-      console.warn(`Prerender incomplete: ${data.timeline.length}/${data.total_segments} segments. Falling back to WAV.`);
+      console.warn(`Prerender incomplete: ${data.timeline.length}/${data.total_segments} chapter.segments. Falling back to WAV.`);
       _chapterPrerenderChId = chId; // don't re-POST
       return false;
     }
@@ -696,7 +697,7 @@ async function _playSegmentChapterMode(idx, gen) {
     for (const { idx: i, t_start, t_end } of data.timeline) {
       _segStart[i]     = t_start;
       _segEnd[i]       = t_end;
-      _segDurations[i] = t_end - t_start;
+      chapter.durations[i] = t_end - t_start;
     }
 
     // Silence the standby element so a leftover preloaded WAV segment doesn't
@@ -709,7 +710,7 @@ async function _playSegmentChapterMode(idx, gen) {
 
     audio.src = data.audio_url;
     audio.playbackRate = speedMultiplier;
-    _chapterAudioChId = currentChapterId;
+    _chapterAudioChId = chapter.id;
     _preloadNextChapter();
   }
 
@@ -744,7 +745,7 @@ async function _playSegmentChapterMode(idx, gen) {
 }
 
 async function playSegment(idx) {
-  if (idx >= segments.length) { stopPlayback(); return; }
+  if (idx >= chapter.segments.length) { stopPlayback(); return; }
 
   const gen = ++_playGen;
   isPlaying = true;
@@ -753,7 +754,7 @@ async function playSegment(idx) {
   setCurrentSegment(idx, { highlight: true, save: false });
 
   const charEl    = document.getElementById('pb-character');
-  const seg       = segments[idx];
+  const seg       = chapter.segments[idx];
   const charLabel = seg.character_name || 'Narrator';
 
   // ── Full-chapter mode (pre-rendered single file) ──────────────────────────
@@ -774,7 +775,7 @@ async function playSegment(idx) {
       let initOffset = 0;
       if (!_sbReady) {
         for (let i = 0; i < idx; i++) {
-          initOffset += segments[i]?.duration_sec ?? _segDurations[i] ?? 0;
+          initOffset += chapter.segments[i]?.duration_sec ?? chapter.durations[i] ?? 0;
         }
       } else if (_segStart[idx] !== undefined && !_isInBuffer(_segStart[idx])) {
         // Segment position known but evicted from buffer — restart from there
@@ -851,7 +852,7 @@ async function playSegment(idx) {
       charEl.textContent = charLabel;
       audio.src = data.audio_url;
     }
-    _segDurations[idx] = data.duration_sec;
+    chapter.durations[idx] = data.duration_sec;
     audio.playbackRate = speedMultiplier;
     startWordHighlight(idx, data.duration_sec);
     await audio.play();
@@ -865,7 +866,7 @@ async function playSegment(idx) {
 }
 
 function _preloadNextChapter() {
-  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  const idx = chapters.findIndex(c => c.id === chapter.id);
   if (idx < 0 || idx >= chapters.length - 1) return;
   const nextChId = chapters[idx + 1].id;
   fetch(`/api/books/${BOOK_ID}/chapters/${nextChId}/prerender`, { method: 'POST' })
@@ -873,7 +874,7 @@ function _preloadNextChapter() {
 }
 
 async function _advanceChapter() {
-  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  const idx = chapters.findIndex(c => c.id === chapter.id);
   if (idx >= 0 && idx < chapters.length - 1) {
     // Keep audio.src and media session alive across the chapter gap so the OS
     // lock-screen notification doesn't disappear during the API fetches.
@@ -912,21 +913,21 @@ function _onAudioEnded(e) {
   // prerender isn't cached yet, leaving _sbReady=false even though _mseOk=true.
   // In that fallback every segment fires 'ended', which must advance a segment,
   // not the whole chapter.
-  const wholeChapter = (_mseOk && _sbReady) || (_fullChapterMode && _chapterAudioChId === currentChapterId);
+  const wholeChapter = (_mseOk && _sbReady) || (_fullChapterMode && _chapterAudioChId === chapter.id);
   if (wholeChapter) {
     // Whole chapter played as one file; RAF was paused if screen was locked.
     // Advance to the last segment before saving/stopping so unlock shows correct position.
-    currentSegIdx = segments.length - 1;
-    queueProgressSave(currentChapterId, currentSegIdx);
+    currentSegIdx = chapter.segments.length - 1;
+    queueProgressSave(chapter.id, currentSegIdx);
     if (_sleepOnChapterEnd) { _sleepOnChapterEnd = false; _updateSleepTimerUI(); stopPlayback(); return; }
     _advanceChapter();
     return;
   }
   // WAV segment-by-segment fallback: advance segment, or chapter when done
   const next = currentSegIdx + 1;
-  if (next < segments.length) playSegment(next);
+  if (next < chapter.segments.length) playSegment(next);
   else {
-    queueProgressSave(currentChapterId, currentSegIdx);
+    queueProgressSave(chapter.id, currentSegIdx);
     if (_sleepOnChapterEnd) { _sleepOnChapterEnd = false; _updateSleepTimerUI(); stopPlayback(); return; }
     _advanceChapter();
   }
@@ -940,7 +941,7 @@ function _onAudioError(e) {
   _forgetAudio(currentSegIdx);
   // Skip the broken segment rather than stopping entirely
   const next = currentSegIdx + 1;
-  if (next < segments.length) playSegment(next);
+  if (next < chapter.segments.length) playSegment(next);
   else stopPlayback();
 }
 
@@ -960,7 +961,7 @@ function _onAudioSeeked(e) {
   if (!isPlaying || (!_mseOk && !_fullChapterMode)) return;
   const t = audio.currentTime;
   let correct = currentSegIdx;
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = 0; i < chapter.segments.length; i++) {
     if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
     else if (_segStart[i] !== undefined) break;
   }
@@ -995,7 +996,7 @@ function stopPlayback() {
     _segStart            = {};
     _segEnd              = {};
   }
-  if (currentChapterId) queueProgressSave(currentChapterId, currentSegIdx);
+  if (chapter.id) queueProgressSave(chapter.id, currentSegIdx);
   const btn = document.getElementById('btn-play');
   btn.innerHTML = '&#9654;';
   btn.classList.add('paused');
@@ -1038,7 +1039,7 @@ function startWordHighlight(segIdx, durationSec) {
     // Scan forward past any segments that haven't been appended yet.
     if (_useTimeline && isPlaying) {
       let firstMissing = -1;
-      for (let ni = segIdx + 1; ni < segments.length; ni++) {
+      for (let ni = segIdx + 1; ni < chapter.segments.length; ni++) {
         const nextStart = _segStart[ni];
         if (nextStart === undefined) {
           if (firstMissing < 0) firstMissing = ni; // first unappended segment
@@ -1088,8 +1089,8 @@ function highlightSegment(idx, options = {}) {
 // ── Progress bar ──────────────────────────────────────────────────────────────
 
 function updateProgress() {
-  if (!segments.length) return;
-  const pct = ((currentSegIdx) / segments.length) * 100;
+  if (!chapter.segments.length) return;
+  const pct = ((currentSegIdx) / chapter.segments.length) * 100;
   const fill = document.getElementById('chapter-progress-fill');
   if (fill) fill.style.width = pct + '%';
 }
@@ -1107,9 +1108,9 @@ function updatePlaybackUI() {
     btn.innerHTML = '&#9654;';
     btn.classList.add('paused');
   }
-  if (segments.length) {
-    prog.textContent = `${currentSegIdx + 1} / ${segments.length}`;
-    if (fill) fill.style.width = `${((currentSegIdx + 1) / segments.length) * 100}%`;
+  if (chapter.segments.length) {
+    prog.textContent = `${currentSegIdx + 1} / ${chapter.segments.length}`;
+    if (fill) fill.style.width = `${((currentSegIdx + 1) / chapter.segments.length) * 100}%`;
   }
 }
 
@@ -1124,7 +1125,7 @@ function _seekToTime(targetTime) {
   _seekingIntentionally = true;
   audio.currentTime = t;
   let correct = 0;
-  for (let i = 0; i < segments.length; i++) {
+  for (let i = 0; i < chapter.segments.length; i++) {
     if (_segStart[i] !== undefined && t >= _segStart[i]) correct = i;
     else if (_segStart[i] !== undefined) break;
   }
@@ -1144,10 +1145,10 @@ function _updateMediaPosition(idx) {
   if (!('mediaSession' in navigator)) return;
   // Build position from known durations; unknown segments estimated at 0
   let position = 0;
-  for (let i = 0; i < idx; i++) position += _segDurations[i] || 0;
+  for (let i = 0; i < idx; i++) position += chapter.durations[i] || 0;
   // Total duration: sum of known durations + 0 for unknown future segments
   let total = 0;
-  for (let i = 0; i < segments.length; i++) total += _segDurations[i] || 0;
+  for (let i = 0; i < chapter.segments.length; i++) total += chapter.durations[i] || 0;
   if (total > 0) {
     try {
       navigator.mediaSession.setPositionState({
@@ -1178,7 +1179,7 @@ function initMediaSession() {
       _sleepTimerFired = false;
       updateMediaSession(true);
       updatePlaybackUI();
-      const dur = _segDur(currentSegIdx) || _segDurations[currentSegIdx] || 0;
+      const dur = _segDur(currentSegIdx) || chapter.durations[currentSegIdx] || 0;
       startWordHighlight(currentSegIdx, dur);
       audio.play().catch(() => {
         isPlaying = false;
@@ -1204,7 +1205,7 @@ function initMediaSession() {
   };
   const _seekFwd = (details) => {
     if (!_seekToTime(audio.currentTime + (details?.seekOffset ?? 10))) {
-      const next = Math.min(currentSegIdx + 1, segments.length - 1);
+      const next = Math.min(currentSegIdx + 1, chapter.segments.length - 1);
       if (isPlaying) playSegment(next); else setCurrentSegment(next, { highlight: true, save: true });
     }
   };
@@ -1252,7 +1253,7 @@ function _onSleepTimerFired() {
   // updated currentSegIdx; capture the real position now so unlock shows it.
   if (_mseOk || _fullChapterMode) {
     const t = audio.currentTime;
-    for (let i = currentSegIdx + 1; i < segments.length; i++) {
+    for (let i = currentSegIdx + 1; i < chapter.segments.length; i++) {
       const s = _segStart[i];
       if (s === undefined || t < s) break;
       currentSegIdx = i;
@@ -1299,7 +1300,7 @@ document.getElementById('btn-play').onclick = () => {
     stopWordHighlight();
     audio.pause();
     updatePlaybackUI();
-    queueProgressSave(currentChapterId, currentSegIdx);
+    queueProgressSave(chapter.id, currentSegIdx);
   } else {
     playSegment(currentSegIdx);
   }
@@ -1308,11 +1309,11 @@ document.getElementById('btn-play').onclick = () => {
 document.getElementById('btn-stop').onclick = () => {
   stopPlayback();
   // True stop: go back to the beginning of the chapter, not just pause in place.
-  if (currentChapterId) setCurrentSegment(0, { highlight: true, behavior: 'smooth', save: true });
+  if (chapter.id) setCurrentSegment(0, { highlight: true, behavior: 'smooth', save: true });
 };
 
 document.getElementById('btn-next-seg').onclick = () => {
-  const next = Math.min(currentSegIdx + 1, segments.length - 1);
+  const next = Math.min(currentSegIdx + 1, chapter.segments.length - 1);
   if (isPlaying) playSegment(next);
   else { setCurrentSegment(next, { highlight: true, save: true }); }
 };
@@ -1324,19 +1325,19 @@ document.getElementById('btn-prev-seg').onclick = () => {
 };
 
 document.getElementById('btn-prev-ch').onclick = () => {
-  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  const idx = chapters.findIndex(c => c.id === chapter.id);
   if (idx > 0) openChapter(chapters[idx - 1].id);
 };
 document.getElementById('btn-next-ch').onclick = () => {
-  const idx = chapters.findIndex(c => c.id === currentChapterId);
+  const idx = chapters.findIndex(c => c.id === chapter.id);
   if (idx >= 0 && idx < chapters.length - 1) openChapter(chapters[idx + 1].id);
 };
 
 document.getElementById('pb-seek-bar').onclick = (e) => {
-  if (!segments.length) return;
+  if (!chapter.segments.length) return;
   const bar = e.currentTarget;
   const frac = Math.max(0, Math.min(1, e.offsetX / bar.offsetWidth));
-  const targetIdx = Math.round(frac * (segments.length - 1));
+  const targetIdx = Math.round(frac * (chapter.segments.length - 1));
   if (isPlaying) playSegment(targetIdx);
   else setCurrentSegment(targetIdx, { highlight: true, save: true });
 };
@@ -1379,10 +1380,10 @@ document.getElementById('speed-slider').oninput = function() {
 
   if (reBtn) {
     reBtn.onclick = async () => {
-      if (!currentChapterId) return;
+      if (!chapter.id) return;
       reBtn.disabled = true;
       try {
-        await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/prerender`, { method: 'DELETE' });
+        await fetch(`/api/books/${BOOK_ID}/chapters/${chapter.id}/prerender`, { method: 'DELETE' });
       } catch (_) {}
       const wasPlaying = isPlaying;
       const idx = currentSegIdx;
@@ -1419,7 +1420,7 @@ function toggleBookmarkPanel() {
 // ── Progress persistence ──────────────────────────────────────────────────────
 
 function updateProgressFromViewport() {
-  if (!segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
+  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
 
   const sentenceEls = document.querySelectorAll('.sentence');
   if (!sentenceEls.length) return;
@@ -1443,12 +1444,12 @@ function updateProgressFromViewport() {
     _kickBuffer();
     updatePlaybackUI();
     updateProgress();
-    queueProgressSave(currentChapterId, currentSegIdx);
+    queueProgressSave(chapter.id, currentSegIdx);
   }
 }
 
 function scheduleViewportProgressUpdate() {
-  if (!segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
+  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
   clearTimeout(_scrollProgressTimer);
   _scrollProgressTimer = setTimeout(updateProgressFromViewport, 120);
 }
@@ -1477,14 +1478,14 @@ function renderBookmarks() {
 }
 
 async function addBookmark() {
-  if (!currentChapterId) { showToast('Open a chapter first.'); return; }
-  const seg = segments[currentSegIdx];
+  if (!chapter.id) { showToast('Open a chapter first.'); return; }
+  const seg = chapter.segments[currentSegIdx];
   const excerpt = seg ? seg.text.slice(0, 120) : '';
   const r = await fetch(`/api/books/${BOOK_ID}/bookmarks`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({
-      chapter_id:    currentChapterId,
+      chapter_id:    chapter.id,
       segment_index: currentSegIdx,
       text_excerpt:  excerpt,
     }),
@@ -1505,7 +1506,7 @@ async function removeBookmark(e, id) {
 }
 
 function gotoBookmark(chapterId, segIdx) {
-  if (chapterId !== currentChapterId) {
+  if (chapterId !== chapter.id) {
     openChapter(chapterId, {
       resumePosition: segIdx,
       persistCurrent: true,
@@ -1524,7 +1525,7 @@ document.getElementById('export-btn').onclick = () => {
 };
 
 document.getElementById('do-export-btn').onclick = async () => {
-  if (!currentChapterId) { showToast('Open a chapter first.'); return; }
+  if (!chapter.id) { showToast('Open a chapter first.'); return; }
 
   const mode      = document.querySelector('input[name="exp-mode"]:checked').value;
   const audioFmt  = document.querySelector('input[name="exp-audio"]:checked').value;
@@ -1542,7 +1543,7 @@ document.getElementById('do-export-btn').onclick = async () => {
   status.textContent = 'Starting export…';
 
   let url;
-  if (mode === 'chapter')          url = `/api/books/${BOOK_ID}/export/chapter/${currentChapterId}`;
+  if (mode === 'chapter')          url = `/api/books/${BOOK_ID}/export/chapter/${chapter.id}`;
   else if (mode === 'chapterwise') url = `/api/books/${BOOK_ID}/export/chapterwise`;
   else                             url = `/api/books/${BOOK_ID}/export/full`;
 
@@ -1600,10 +1601,10 @@ document.getElementById('do-export-btn').onclick = async () => {
 };
 
 document.getElementById('preload-btn').onclick = async () => {
-  if (!currentChapterId) { showToast('Open a chapter first.'); return; }
+  if (!chapter.id) { showToast('Open a chapter first.'); return; }
   const status = document.getElementById('preload-status');
   const btn    = document.getElementById('preload-btn');
-  const idx    = chapters.findIndex(c => c.id === currentChapterId);
+  const idx    = chapters.findIndex(c => c.id === chapter.id);
   if (idx < 0) { showToast('Chapter not found.'); return; }
   const remaining = chapters.slice(idx);
   btn.disabled = true;
@@ -1679,10 +1680,10 @@ let _speakerEditIdx = -1;
 
 // Indices of the segments a correction at `idx` covers for the chosen scope.
 function _speakerScopeIndices(idx, scope) {
-  const seg = segments[idx];
+  const seg = chapter.segments[idx];
   if (scope === 'segment') return [idx];
-  return [...segments.keys()].filter(i => {
-    const s = segments[i];
+  return [...chapter.segments.keys()].filter(i => {
+    const s = chapter.segments[i];
     if (s.paragraph !== seg.paragraph) return false;
     return scope === 'quote' ? s.span === seg.span : (s.is_dialogue || i === idx);
   });
@@ -1690,11 +1691,11 @@ function _speakerScopeIndices(idx, scope) {
 
 function openSpeakerEditor(idx = currentSegIdx) {
   // Section breaks have no text to attribute: use the nearest sentence instead.
-  if (!segments[idx]?.text) {
-    const after = segments.findIndex((s, i) => i >= idx && s.text);
-    idx = after >= 0 ? after : segments.slice(0, idx).findLastIndex(s => s.text);
+  if (!chapter.segments[idx]?.text) {
+    const after = chapter.segments.findIndex((s, i) => i >= idx && s.text);
+    idx = after >= 0 ? after : chapter.segments.slice(0, idx).findLastIndex(s => s.text);
   }
-  const seg = segments[idx];
+  const seg = chapter.segments[idx];
   if (!seg || !seg.text) { showToast('Nothing to correct here', 'err'); return; }
   _speakerEditIdx = idx;
 
@@ -1723,10 +1724,10 @@ function renderSpeakerPreview() {
   const picked = document.getElementById('speaker-select').value;
   const color = picked && picked !== '__new__' ? charColors[picked] : '';
   const affected = new Set(_speakerScopeIndices(idx, scope));
-  const para = segments[idx].paragraph;
+  const para = chapter.segments[idx].paragraph;
   const box = document.getElementById('speaker-text');
   box.style.setProperty('--sp-color', color || 'var(--text3)');
-  box.innerHTML = segments.map((s, i) => ({ s, i })).filter(({ s }) => s.paragraph === para && s.text)
+  box.innerHTML = chapter.segments.map((s, i) => ({ s, i })).filter(({ s }) => s.paragraph === para && s.text)
     .map(({ s, i }) => {
       const cls = 'sp-sent' + (affected.has(i) ? ' affected' : '') + (i === idx ? ' target' : '');
       return `<span class="${cls}">${esc(s.text)}</span>`;
@@ -1855,8 +1856,8 @@ async function applySpeaker(reset) {
       character = data.name;
     }
 
-    const anchors = _speakerScopeIndices(idx, scope).map(i => segments[i].anchor).filter(Boolean);
-    const r = await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/speaker`, {
+    const anchors = _speakerScopeIndices(idx, scope).map(i => chapter.segments[i].anchor).filter(Boolean);
+    const r = await fetch(`/api/books/${BOOK_ID}/chapters/${chapter.id}/speaker`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ character, anchors, reset: !!reset }),
@@ -1867,7 +1868,7 @@ async function applySpeaker(reset) {
     closeSpeakerEditor();
     showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
     // Reload the chapter so the new attribution, colours and voices take effect.
-    await openChapter(currentChapterId, {
+    await openChapter(chapter.id, {
       resumePosition: idx, persistCurrent: false, persistOpened: false, highlightOnLoad: true,
     });
   } catch (e) {
@@ -1909,7 +1910,7 @@ document.addEventListener('visibilitychange', () => {
   if (!_mseOk && !_fullChapterMode) return;
   const t = audio.currentTime;
   let correct = currentSegIdx;
-  for (let i = currentSegIdx + 1; i < segments.length; i++) {
+  for (let i = currentSegIdx + 1; i < chapter.segments.length; i++) {
     const s = _segStart[i];
     if (s === undefined || t < s) break;
     correct = i;
