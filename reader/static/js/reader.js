@@ -1321,25 +1321,44 @@ function _clearSleepTimer() {
   clearInterval(_sleepCountdownId); _sleepCountdownId = null;
 }
 
-function setSleepTimer(minutes) {
+// minutes: 0 = off, -1 = end of chapter, otherwise a countdown (a preset, or any value from the dial).
+// The menu closes after picking, except when fine-tuning from the dial or the nudge buttons.
+function setSleepTimer(minutes, { keepOpen = false } = {}) {
   _clearSleepTimer();
   _sleepTimerEnd     = 0;
   _sleepOnChapterEnd = false;
   _sleepTimerFired   = false;
 
-  if (minutes === 0) {
-    _updateSleepTimerUI();
-    return;
-  }
   if (minutes < 0) {                     // special value: end of chapter
     _sleepOnChapterEnd = true;
-  } else {
-    _sleepTimerEnd = Date.now() + minutes * 60_000;
-    _sleepTimerId  = setTimeout(_onSleepTimerFired, minutes * 60_000);
-    _sleepCountdownId = setInterval(_updateSleepTimerUI, 1000);
+  } else if (minutes > 0) {
+    _startSleepCountdown(minutes * 60_000);
   }
   _updateSleepTimerUI();
-  document.getElementById('sleep-dropdown').classList.add('hidden');
+  if (!keepOpen) document.getElementById('sleep-dropdown').classList.add('hidden');
+}
+
+function _startSleepCountdown(ms) {
+  _sleepTimerEnd = Date.now() + ms;
+  _sleepTimerId  = setTimeout(_onSleepTimerFired, ms);
+  _sleepCountdownId = setInterval(_updateSleepTimerUI, 1000);
+}
+
+// Move a running timer's end by a few minutes (never below one minute from now).
+function adjustSleepTimer(deltaMinutes) {
+  if (_sleepTimerEnd <= 0) return;
+  const remaining = _sleepTimerEnd - Date.now();
+  _clearSleepTimer();
+  _startSleepCountdown(Math.max(60_000, remaining + deltaMinutes * 60_000));
+  _updateSleepTimerUI();
+}
+
+const _minutesLabel = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}` : `${m} min`;
+let _sleepDialDragging = false;      // while the dial is being moved, the running timer does not move it back
+
+function onSleepDial(value) {
+  _sleepDialDragging = true;
+  document.getElementById('sleep-dial-label').textContent = _minutesLabel(+value);
 }
 
 function _onSleepTimerFired() {
@@ -1364,15 +1383,27 @@ function _onSleepTimerFired() {
 function _updateSleepTimerUI() {
   const btn = document.getElementById('sleep-btn');
   if (!btn) return;
+  const status = document.getElementById('sleep-status');
+  const remaining = document.getElementById('sleep-remaining');
+  const dial = document.getElementById('sleep-dial');
+  status.classList.toggle('hidden', !(_sleepOnChapterEnd || _sleepTimerEnd > 0));
   if (_sleepOnChapterEnd) {
     btn.textContent = '☽ ch';
     btn.classList.add('sleep-active');
+    remaining.textContent = 'end of chapter';
+    status.querySelectorAll('.sleep-nudge').forEach(b => b.classList.add('hidden'));
   } else if (_sleepTimerEnd > 0) {
     const ms  = Math.max(0, _sleepTimerEnd - Date.now());
     const m   = Math.floor(ms / 60_000);
     const s   = Math.floor((ms % 60_000) / 1000);
     btn.textContent = `${m}:${String(s).padStart(2, '0')}`;
     btn.classList.add('sleep-active');
+    remaining.textContent = btn.textContent;
+    status.querySelectorAll('.sleep-nudge').forEach(b => b.classList.remove('hidden'));
+    if (!_sleepDialDragging) {                      // the dial follows the clock
+      dial.value = Math.min(+dial.max, Math.max(1, Math.ceil(ms / 60_000)));
+      document.getElementById('sleep-dial-label').textContent = _minutesLabel(+dial.value);
+    }
   } else {
     btn.textContent = '☽';
     btn.classList.remove('sleep-active');

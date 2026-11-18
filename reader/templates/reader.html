@@ -89,12 +89,22 @@
       <button class="btn btn-sm btn-ghost" id="sleep-btn" title="Sleep timer">&#9789;</button>
       <div class="sleep-dropdown hidden" id="sleep-dropdown">
         <div class="sleep-dropdown-title">Sleep Timer</div>
+        <div class="sleep-status hidden" id="sleep-status">
+          <button class="sleep-nudge" onclick="adjustSleepTimer(-5)" title="5 minutes less">&#8722;5</button>
+          <span id="sleep-remaining"></span>
+          <button class="sleep-nudge" onclick="adjustSleepTimer(5)" title="5 minutes more">+5</button>
+        </div>
         <div class="sleep-option" onclick="setSleepTimer(0)">Off</div>
         <div class="sleep-option" onclick="setSleepTimer(15)">15 min</div>
         <div class="sleep-option" onclick="setSleepTimer(30)">30 min</div>
         <div class="sleep-option" onclick="setSleepTimer(45)">45 min</div>
         <div class="sleep-option" onclick="setSleepTimer(60)">1 hour</div>
         <div class="sleep-option" onclick="setSleepTimer(-1)">End of chapter</div>
+        <div class="sleep-dial">
+          <div class="sleep-dial-label"><span>Dial it in</span><b id="sleep-dial-label">30 min</b></div>
+          <input type="range" id="sleep-dial" min="1" max="120" step="1" value="30"
+                 oninput="onSleepDial(this.value)" onchange="setSleepTimer(+this.value, { keepOpen: true }); _sleepDialDragging = false;">
+        </div>
       </div>
     </div>
     <div class="export-menu-wrap">
