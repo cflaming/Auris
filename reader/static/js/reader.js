@@ -72,6 +72,7 @@ let _autoAdvancing      = false; // true while _advanceChapter awaits openChapte
 // Cancellation token for the background buffer loop — incremented on each
 // chapter open so the previous loop exits without touching the new chapter.
 let _bufferGenId = 0;
+let _bufferWake = null;   // resolves the buffer loop's current sleep (see _kickBuffer)
 
 function _standby() { return audio === _audioA ? _audioB : _audioA; }
 function _swapAudio() { audio = (audio === _audioA ? _audioB : _audioA); }
@@ -136,6 +137,7 @@ function updateSpeakerLabel() {
 function setCurrentSegment(idx, options = {}) {
   const { highlight = false, behavior = 'smooth', save = true } = options;
   currentSegIdx = clampSegmentIndex(idx);
+  _kickBuffer();
   updateSpeakerLabel();
   if (highlight) {
     highlightSegment(currentSegIdx, { behavior });
@@ -395,25 +397,33 @@ function jumpTo(idx) {
 const BUFFER_AHEAD = 10;
 const BUFFER_RETRY_MS = 5000;     // pause after a failed generation before trying again
 
+// The buffer sleeps with no timer at all until something it depends on changes, and
+// _kickBuffer() wakes it: the cursor moved, playback stopped, the tab became visible,
+// or a chapter opened. (A timer-polling loop costs battery on a phone even when idle.)
+function _kickBuffer() { _bufferWake?.(); }
+const _bufferIdle = () => new Promise(resolve => { _bufferWake = resolve; });
+
 async function _startBackgroundBuffer() {
   const myId = ++_bufferGenId;
   const myChapterId = currentChapterId;
+  _kickBuffer();                                       // let a previous chapter's loop notice and exit
 
   while (_bufferGenId === myId && currentChapterId === myChapterId) {
-    if (isPlaying || document.hidden) { await sleep(isPlaying ? 600 : 3000); continue; }
-
-    const end = Math.min(segments.length, currentSegIdx + BUFFER_AHEAD + 1);
+    // Look for work and go to sleep in the same step, so a wake-up can never slip in between.
     let next = -1;
-    for (let i = currentSegIdx; i < end; i++) {
-      if (!segments[i]?.has_audio && !_segCache.has(i)) { next = i; break; }
+    if (!isPlaying && !document.hidden) {              // while playing, playback preloads its own segments
+      const end = Math.min(segments.length, currentSegIdx + BUFFER_AHEAD + 1);
+      for (let i = currentSegIdx; i < end; i++) {
+        if (!segments[i]?.has_audio && !_segCache.has(i)) { next = i; break; }
+      }
     }
-    if (next < 0) { await sleep(1000); continue; }   // window is full: wait for the cursor to move
+    if (next < 0) { await _bufferIdle(); continue; }
 
     try {
       await fetchSegmentData(next);
-      await sleep(100);                              // let the event loop breathe between generations
+      await sleep(100);                                // let the event loop breathe between generations
     } catch (_) {
-      await sleep(BUFFER_RETRY_MS);                  // e.g. the model is still loading: don't hammer it
+      await sleep(BUFFER_RETRY_MS);                    // e.g. the model is still loading: don't hammer it
     }
   }
 }
@@ -967,6 +977,7 @@ _audioB.addEventListener('seeked', _onAudioSeeked);
 
 function stopPlayback() {
   isPlaying = false;
+  _kickBuffer();
   _playGen++;
   stopWordHighlight();
   if (_mseOk) {
@@ -1182,7 +1193,7 @@ function initMediaSession() {
     }
   });
   navigator.mediaSession.setActionHandler('pause', () => {
-    if (isPlaying) { isPlaying = false; stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
+    if (isPlaying) { isPlaying = false; _kickBuffer(); stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
   });
   // previoustrack/nexttrack are reliably fired on iOS; seekbackward/seekforward
   // have limited iOS Safari support. Wire previous/next to ±10s time seek so
@@ -1286,6 +1297,7 @@ document.addEventListener('click', (e) => {
 document.getElementById('btn-play').onclick = () => {
   if (isPlaying) {
     isPlaying = false;
+    _kickBuffer();
     stopWordHighlight();
     audio.pause();
     updatePlaybackUI();
@@ -1430,6 +1442,7 @@ function updateProgressFromViewport() {
 
   if (bestIdx !== currentSegIdx) {
     currentSegIdx = bestIdx;
+    _kickBuffer();
     updatePlaybackUI();
     updateProgress();
     queueProgressSave(currentChapterId, currentSegIdx);
@@ -1891,6 +1904,7 @@ document.addEventListener('visibilitychange', () => {
     flushProgressSave({ useBeacon: true, force: true });
     return;
   }
+  _kickBuffer();
   // On unlock: resync currentSegIdx to audio.currentTime regardless of play
   // state. The RAF pauses while the screen is locked, so currentSegIdx can lag
   // behind even when the user paused mid-chapter on the lock screen.
