@@ -1467,11 +1467,17 @@ function adjustSleepTimer(deltaMinutes) {
 }
 
 const _minutesLabel = m => m >= 60 ? `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}` : `${m} min`;
+const _setDialLabel = m => { document.getElementById('sleep-dial-label').textContent = _minutesLabel(m); };
 let _sleepDialDragging = false;      // while the dial is being moved, the running timer does not move it back
 
 function onSleepDial(value) {
   _sleepDialDragging = true;
-  document.getElementById('sleep-dial-label').textContent = _minutesLabel(+value);
+  _setDialLabel(+value);
+}
+
+function commitSleepDial(value) {              // the dial was let go
+  setSleepTimer(+value, { keepOpen: true });
+  _sleepDialDragging = false;
 }
 
 function _onSleepTimerFired() {
@@ -1500,11 +1506,11 @@ function _updateSleepTimerUI() {
   const remaining = document.getElementById('sleep-remaining');
   const dial = document.getElementById('sleep-dial');
   status.classList.toggle('hidden', !(_sleepOnChapterEnd || _sleepTimerEnd > 0));
+  status.classList.toggle('chapter-end', _sleepOnChapterEnd);        // no nudging an end-of-chapter timer
   if (_sleepOnChapterEnd) {
     btn.textContent = '☽ ch';
     btn.classList.add('sleep-active');
     remaining.textContent = 'end of chapter';
-    status.querySelectorAll('.sleep-nudge').forEach(b => b.classList.add('hidden'));
   } else if (_sleepTimerEnd > 0) {
     const ms  = Math.max(0, _sleepTimerEnd - Date.now());
     const m   = Math.floor(ms / 60_000);
@@ -1512,10 +1518,9 @@ function _updateSleepTimerUI() {
     btn.textContent = `${m}:${String(s).padStart(2, '0')}`;
     btn.classList.add('sleep-active');
     remaining.textContent = btn.textContent;
-    status.querySelectorAll('.sleep-nudge').forEach(b => b.classList.remove('hidden'));
     if (!_sleepDialDragging) {                      // the dial follows the clock
       dial.value = Math.min(+dial.max, Math.max(1, Math.ceil(ms / 60_000)));
-      document.getElementById('sleep-dial-label').textContent = _minutesLabel(+dial.value);
+      _setDialLabel(+dial.value);
     }
   } else {
     btn.textContent = '☽';
@@ -1593,10 +1598,10 @@ function snapSpeed(v) {                          // nearest available speed
 }
 const speedLabel = v => v.toFixed(2).replace(/0$/, '') + '\u00d7';     // 1.0x, 1.1x, 2.25x
 
-function setSpeed(value) {
-  speedMultiplier = snapSpeed(value);
+function setSpeed(index) {                       // index into SPEED_VALUES, which is what the slider holds
+  speedMultiplier = SPEED_VALUES[index];
   localStorage.setItem('speedMultiplier', speedMultiplier);
-  document.getElementById('speed-slider').value = SPEED_VALUES.indexOf(speedMultiplier);
+  document.getElementById('speed-slider').value = index;
   document.getElementById('speed-val').textContent = speedLabel(speedMultiplier);
   audio.playbackRate = speedMultiplier;
   if (!_mseOk) _audioB.playbackRate = speedMultiplier;
@@ -1604,9 +1609,10 @@ function setSpeed(value) {
 
 (function initSpeedUI() {
   const slider = document.getElementById('speed-slider');
-  slider.oninput = () => setSpeed(SPEED_VALUES[+slider.value]);
-  document.getElementById('speed-val').onclick = () => setSpeed(1);
-  setSpeed(Number.isFinite(speedMultiplier) ? speedMultiplier : 1);
+  const indexOf = speed => SPEED_VALUES.indexOf(snapSpeed(speed));
+  slider.oninput = () => setSpeed(+slider.value);
+  document.getElementById('speed-val').onclick = () => setSpeed(indexOf(1));
+  setSpeed(indexOf(Number.isFinite(speedMultiplier) ? speedMultiplier : 1));      // a saved speed snaps to a notch
 })();
 
 (function initModeToggle() {
@@ -2172,7 +2178,6 @@ function onSpeakerSelectChange() {
 
 let _speakerChoice = '';        // '' = narrator, '__new__', or a character name
 let _speakerPicked = false;     // a name has been picked in this dialog (so Enter on it again applies)
-let _speakerTyped = false;      // the box holds something the user typed, so the list is filtered by it
 let _speakerRows = [];          // what the list shows
 let _speakerActive = -1;        // index in _speakerRows of the highlighted row
 const SPEAKERS_NEARBY = 5;
@@ -2239,10 +2244,10 @@ function buildSpeakerRows(query) {
 // "Search" on a device with no keyboard to type on.
 function showSpeakerList() {
   const input = document.getElementById('speaker-input');
-  _speakerRows = buildSpeakerRows(_speakerTyped ? input.value : '');
+  _speakerRows = buildSpeakerRows(input.value);                    // empty unless the search box is showing
   const selectable = _speakerRows.filter(r => r.kind !== 'heading');
   const current = selectable.findIndex(r => r.kind !== 'new' && r.value === _speakerChoice);
-  _speakerActive = _speakerRows.indexOf(selectable[_speakerTyped ? 0 : Math.max(current, 0)]);
+  _speakerActive = _speakerRows.indexOf(selectable[_speakerSearching() ? 0 : Math.max(current, 0)]);
   const list = document.getElementById('speaker-list');
   list.innerHTML = selectable.length ? _speakerRows.map((r, i) => {
     if (r.kind === 'heading') return `<li class="heading" role="presentation">${esc(r.label)}</li>`;
@@ -2255,13 +2260,15 @@ function showSpeakerList() {
 
 const _speakerChoiceLabel = () => _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
 
+// The list is filtered by the search box, which is shown only while searching.
+const _speakerSearching = () => !document.getElementById('speaker-input').classList.contains('hidden');
+
 // Reveal the search box (optionally starting with some text) and filter by it.
 function revealSpeakerSearch(text = '') {
   const input = document.getElementById('speaker-input');
   document.getElementById('speaker-head').classList.add('hidden');
   input.classList.remove('hidden');
   input.value = text;
-  _speakerTyped = true;
   input.focus();
   showSpeakerList();
 }
@@ -2272,7 +2279,6 @@ function resetSpeakerSearch() {
   document.getElementById('speaker-head').classList.remove('hidden');
   input.classList.add('hidden');
   input.value = '';
-  _speakerTyped = false;
   document.getElementById('speaker-current').textContent = _speakerChoiceLabel();
   showSpeakerList();
 }
@@ -2302,7 +2308,7 @@ function moveSpeakerActive(step) {
   const modal = document.getElementById('speaker-modal');
   const input = document.getElementById('speaker-input');
   const list = document.getElementById('speaker-list');
-  input.addEventListener('input', () => { _speakerTyped = true; showSpeakerList(); });
+  input.addEventListener('input', showSpeakerList);
 
   // The list and the search box are the two things that take part in picking, and each handles its own
   // keys (focus decides who gets a key, so no other control in the dialog needs excluding): arrows move
@@ -2352,7 +2358,7 @@ function moveSpeakerActive(step) {
   });
 
   input.addEventListener('blur', () => {
-    if (!_speakerTyped) return;
+    if (!_speakerSearching()) return;
     const q = input.value.trim().toLowerCase();
     const exact = q && buildSpeakerRows(input.value).find(r => r.kind !== 'new' && r.label.toLowerCase() === q);
     if (exact) chooseSpeakerRow(exact);          // typed an exact name and moved on: take it

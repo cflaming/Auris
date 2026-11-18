@@ -103,7 +103,7 @@
         <div class="sleep-dial">
           <div class="sleep-dial-label"><span>Dial it in</span><b id="sleep-dial-label">30 min</b></div>
           <input type="range" id="sleep-dial" min="1" max="120" step="1" value="30"
-                 oninput="onSleepDial(this.value)" onchange="setSleepTimer(+this.value, { keepOpen: true }); _sleepDialDragging = false;">
+                 oninput="onSleepDial(this.value)" onchange="commitSleepDial(this.value)">
         </div>
       </div>
     </div>

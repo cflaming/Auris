@@ -823,6 +823,7 @@ body.theme-paper .voice-swatch[style] {
   min-width: 40px; padding: 4px 8px; font-size: 0.78rem; cursor: pointer;
 }
 .sleep-nudge:hover { border-color: var(--accent); color: var(--accent); }
+.sleep-status.chapter-end .sleep-nudge { display: none; }
 .sleep-dial { padding: 8px 14px 2px; border-top: 1px solid var(--border); margin-top: 6px; }
 .sleep-dial-label { display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text3); margin-bottom: 4px; }
 .sleep-dial-label b { color: var(--text1); font-weight: 600; }
