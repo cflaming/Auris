@@ -1,13 +1,12 @@
 """Speaker detection and corrections in core.enrichment — pure functions, no app."""
 
-from core import enrichment
-from core.characters import generate_voice_profile
 import pytest
 
-from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE, CHAPTER_TWO, CHARACTERS
-from tests.helpers import by_text, spoken
+from core import enrichment
+from core.characters import generate_voice_profile
+from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE, CHAPTER_TWO, CHARACTERS, REPEATED_NO
+from tests.helpers import all_by_text, by_text, spoken
 
-REPEATED_NO = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
 WE_SHOULD_LEAVE = '"We should leave before dawn,"'          # Amy
 AFTER_THE_SHIFT = '"After the shift change,"'              # Carol ("she replied")
 
@@ -64,32 +63,31 @@ def test_anchors_are_unique_and_stable():
 
 
 def test_identical_sentences_get_distinct_anchors():
-    segs = [s for s in enrich(REPEATED_NO) if s["text"] == '"No,"']
+    segs = no_lines(REPEATED_NO)
     assert len(segs) == 2 and segs[0]["anchor"] != segs[1]["anchor"]
     assert [s["character_name"] for s in segs] == ["Dean", "Carol"]
 
 
 def test_correcting_one_repeated_sentence_leaves_the_other_alone():
-    first = next(s for s in enrich(REPEATED_NO) if s["text"] == '"No,"')
-    fixed = [s for s in enrich(REPEATED_NO, {first["anchor"]: "Amy"}) if s["text"] == '"No,"']
+    first = no_lines(REPEATED_NO)[0]
+    fixed = no_lines(REPEATED_NO, {first["anchor"]: "Amy"})
     assert [s["character_name"] for s in fixed] == ["Amy", "Carol"]
 
 
 def no_lines(text, overrides=None):
     """The '"No,"' segments of a text, in order."""
-    return [s for s in enrich(text, overrides) if s["text"] == '"No,"']
+    return all_by_text(enrich(text, overrides), '"No,"')
 
 
 def test_fully_ambiguous_repeats_are_told_apart_by_occurrence():
-    first, second = no_lines(AMBIGUOUS_REPEAT)
-    assert first["anchor"] != second["anchor"]                # same sentence, same predecessor
-
+    second = no_lines(AMBIGUOUS_REPEAT)[1]
     fixed = no_lines(AMBIGUOUS_REPEAT, {second["anchor"]: "Amy"})
     assert [(s["character_name"], s["overridden"]) for s in fixed] == [("Dean", False), ("Amy", True)]
 
 
-@pytest.mark.xfail(strict=True, reason="known limitation: anchors count occurrences, so inserting "
-                   "an earlier identical pair shifts a correction onto the wrong repeat")
+@pytest.mark.xfail(strict=True, raises=AssertionError,
+                   reason="known limitation: corrections are keyed by occurrence, so inserting an "
+                          "earlier identical pair moves a correction onto a different repeat")
 def test_a_correction_stays_on_its_sentence_when_an_identical_pair_is_inserted_earlier():
     second = no_lines(AMBIGUOUS_REPEAT)[1]
     longer = 'Nobody spoke. "No," Dean said.\n\n' + AMBIGUOUS_REPEAT       # the corrected line is now third

@@ -9,3 +9,8 @@ def spoken(segs):
 def by_text(segs, text):
     """The segment with exactly this text."""
     return next(s for s in segs if s["text"] == text)
+
+
+def all_by_text(segs, text):
+    """Every segment with exactly this text, in order."""
+    return [s for s in segs if s["text"] == text]

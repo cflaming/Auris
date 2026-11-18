@@ -1,8 +1,10 @@
 """Speaker corrections and character management through the HTTP API."""
 
 from core.database import get_conn
+import pytest
+
 from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE
-from tests.helpers import by_text, spoken
+from tests.helpers import all_by_text, by_text, spoken
 
 NO_DEAN = [("Amy", "female"), ("Carol", "female")]   # Dean not detected yet
 
@@ -29,23 +31,53 @@ def test_correct_one_sentence(make_book, segments, correct):
     assert sum(s["overridden"] for s in after) == 1
 
 
-def test_repeated_identical_lines_are_corrected_independently(make_book, segments, correct, client):
+@pytest.fixture
+def repeats(make_book, segments, correct):
+    """A book whose only chapter repeats one line twice; yields helpers around its two copies."""
     book = make_book(chapters=(AMBIGUOUS_REPEAT,))
-    no_lines = lambda: [s for s in segments(book) if s["text"] == '"No,"']
-    first, second = no_lines()
-    assert first["anchor"] != second["anchor"]
 
-    assert correct(book, [second["anchor"]], "Amy").status_code == 200
-    state = lambda: [(s["character_name"], s["overridden"]) for s in no_lines()]
-    assert state() == [("Dean", False), ("Amy", True)]
+    class Repeats:
+        def lines(self):
+            return all_by_text(segments(book), '"No,"')
 
-    # A rebuild (adding a character re-segments the book) keeps each repeat as it was.
-    client.post(f"/api/books/{book.id}/characters", json={"name": "Evelyn", "gender": "female"})
-    assert state() == [("Dean", False), ("Amy", True)]
+        def state(self):
+            return [(s["character_name"], s["overridden"]) for s in self.lines()]
 
-    # Resetting the corrected repeat leaves the other one alone.
-    correct(book, [second["anchor"]], reset=True)
-    assert state() == [("Dean", False), ("Dean", False)]
+        def correct_second(self, character="Amy", reset=False):
+            return correct(book, [self.lines()[1]["anchor"]], character, reset=reset)
+
+    repeats = Repeats()
+    repeats.book = book
+    return repeats
+
+
+def test_repeated_identical_lines_are_corrected_independently(repeats):
+    assert repeats.state() == [("Dean", False), ("Dean", False)]
+    assert repeats.correct_second().status_code == 200
+    assert repeats.state() == [("Dean", False), ("Amy", True)]
+
+
+def test_a_correction_to_one_repeat_survives_a_rebuild(repeats, client):
+    def segment_ids():
+        with get_conn() as conn:
+            return {r[0] for r in conn.execute("SELECT id FROM tts_segments WHERE book_id=?", (repeats.book.id,))}
+
+    repeats.correct_second()
+    assert repeats.state() == [("Dean", False), ("Amy", True)]     # reading it builds the segments
+    before = segment_ids()
+    assert before
+
+    # Adding a character re-segments the book.
+    res = client.post(f"/api/books/{repeats.book.id}/characters", json={"name": "Evelyn", "gender": "female"})
+    assert res.status_code == 201
+    assert repeats.state() == [("Dean", False), ("Amy", True)]
+    assert segment_ids() and not before & segment_ids()          # rows were rebuilt, not reused
+
+
+def test_resetting_one_repeat_leaves_the_other_alone(repeats):
+    repeats.correct_second()
+    repeats.correct_second(reset=True)
+    assert repeats.state() == [("Dean", False), ("Dean", False)]
 
 
 def test_correct_a_whole_quote_at_once(make_book, segments, correct):

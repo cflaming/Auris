@@ -34,6 +34,7 @@ CHARACTERS = [  # (name, gender)
     ("Dean", "male"),
 ]
 
-# The same sentence with the same sentence before it, twice: only an occurrence
-# counter tells the two "No," lines apart.
+# A line repeated word for word, where nothing but its position tells the copies apart.
+# AMBIGUOUS_REPEAT: same speaker, same preceding sentence. REPEATED_NO: different speakers.
 AMBIGUOUS_REPEAT = 'Nobody spoke. "No," Dean said.\n\nNobody spoke. "No," Dean said.'
+REPEATED_NO = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
