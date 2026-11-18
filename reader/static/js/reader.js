@@ -46,6 +46,10 @@ let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
 let _ignoreScrollTrackingUntil = 0;
+// Once playback has been started and stopped or paused, the current sentence stays put: scrolling
+// elsewhere no longer moves it (so Space resumes where you paused, not where you scrolled to).
+// Click a sentence to move it. Before any playback, scrolling still sets the reading position.
+let _cursorLocked = false;
 let _followPlayback = true;   // playback scrolls to keep the current sentence centred; manual scrolling pauses this
 
 // Two audio elements for gapless double-buffering
@@ -274,6 +278,7 @@ async function openChapter(chapterId, options = {}) {
   }
 
   stopPlayback();
+  _cursorLocked = false;               // a newly opened chapter's position follows scrolling again until it is played
   // A fresh object: nothing from the previous chapter can leak into this one, and its
   // stale segments can't be played while this one loads.
   const ch = { id: chapterId, segments: [], cache: new Map(), durations: {} };
@@ -1029,6 +1034,7 @@ _audioA.addEventListener('seeked', _onAudioSeeked);
 _audioB.addEventListener('seeked', _onAudioSeeked);
 
 function stopPlayback() {
+  if (isPlaying) _cursorLocked = true;
   isPlaying = false;
   _kickBuffer();
   _playGen++;
@@ -1166,9 +1172,24 @@ function resumeFollow({ scroll = true } = {}) {
   if (scroll) highlightSegment(currentSegIdx);
 }
 
+// Where the current sentence is relative to what's on screen: -1 above, 1 below, 0 visible.
+function _cursorSide() {
+  const el = document.querySelector(`[data-idx="${currentSegIdx}"]`);
+  if (!el) return 0;
+  const r = el.getBoundingClientRect();
+  const view = document.getElementById('chapter-content').getBoundingClientRect();
+  return r.bottom < view.top ? -1 : r.top > view.bottom ? 1 : 0;
+}
+
+// The button shows while playback isn't following the page, or while paused with the current
+// sentence scrolled out of view (see _cursorLocked); the arrow points the way back.
 function updateFollowButton() {
   if (!isPlaying) _followPlayback = true;           // pausing or stopping ends a suspension
-  document.getElementById('follow-btn').classList.toggle('hidden', !isPlaying || _followPlayback);
+  const side = _cursorSide();
+  const show = isPlaying ? !_followPlayback : (_cursorLocked && side !== 0);
+  const btn = document.getElementById('follow-btn');
+  btn.classList.toggle('hidden', !show);
+  if (show) btn.innerHTML = `${side < 0 ? '&#8593;' : '&#8595;'} Back to the current sentence`;
 }
 
 // Scrolling the user did, as opposed to the page scrolling itself (re-centring on a sentence, a
@@ -1184,8 +1205,29 @@ function noteUserScroll() {
   suspendFollow();
 }
 
+// Following resumes by itself when you scroll the playing sentence back to the middle of the screen
+// and let go: once scrolling has settled, a current sentence on the centre line (or close to it)
+// means you are done looking elsewhere.
+function _cursorNearCentre() {
+  const el = document.querySelector(`[data-idx="${currentSegIdx}"]`);
+  if (!el) return false;
+  const r = el.getBoundingClientRect();
+  const view = document.getElementById('chapter-content').getBoundingClientRect();
+  const centre = view.top + view.height / 2;
+  return (r.top <= centre && r.bottom >= centre) || Math.abs((r.top + r.bottom) / 2 - centre) < view.height * 0.12;
+}
+function _resumeFollowIfRecentred() {
+  if (isPlaying && !_followPlayback && !_scrollbarDragging && _cursorNearCentre()) resumeFollow({ scroll: false });
+}
+
 (function wireManualScroll() {
   const content = document.getElementById('chapter-content');
+  let settleTimer = null;
+  content.addEventListener('scroll', () => {
+    if (!isPlaying || _followPlayback) return;
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(_resumeFollowIfRecentred, 400);      // 400ms with no further scrolling = let go
+  }, { passive: true });
   content.addEventListener('wheel', noteUserScroll, { passive: true });
   content.addEventListener('touchmove', noteUserScroll, { passive: true });
   content.addEventListener('touchend', () => { _userScrollAt = Date.now(); }, { passive: true });
@@ -1193,7 +1235,12 @@ function noteUserScroll() {
   content.addEventListener('pointerdown', e => {
     if (e.target === content && e.offsetX >= content.clientWidth) { _scrollbarDragging = true; noteUserScroll(); }
   });
-  const dragEnd = () => { if (_scrollbarDragging) { _scrollbarDragging = false; _userScrollAt = Date.now(); } };
+  const dragEnd = () => {
+    if (!_scrollbarDragging) return;
+    _scrollbarDragging = false;
+    _userScrollAt = Date.now();
+    setTimeout(_resumeFollowIfRecentred, 400);
+  };
   document.addEventListener('pointerup', dragEnd);
   document.addEventListener('pointercancel', dragEnd);
   document.addEventListener('keydown', e => {
@@ -1309,7 +1356,7 @@ function initMediaSession() {
     }
   });
   navigator.mediaSession.setActionHandler('pause', () => {
-    if (isPlaying) { isPlaying = false; _kickBuffer(); stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
+    if (isPlaying) { isPlaying = false; _cursorLocked = true; _kickBuffer(); stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
   });
   // previoustrack/nexttrack are reliably fired on iOS; seekbackward/seekforward
   // have limited iOS Safari support. Wire previous/next to ±10s time seek so
@@ -1444,6 +1491,7 @@ document.addEventListener('click', (e) => {
 document.getElementById('btn-play').onclick = () => {
   if (isPlaying) {
     isPlaying = false;
+    _cursorLocked = true;
     _kickBuffer();
     stopWordHighlight();
     audio.pause();
@@ -1600,8 +1648,13 @@ function updateProgressFromViewport() {
 }
 
 function scheduleViewportProgressUpdate() {
-  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil || !_userIsScrolling()) return;
+  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
   clearTimeout(_scrollProgressTimer);
+  if (_cursorLocked) {                      // the cursor stays; just offer the way back to it
+    _scrollProgressTimer = setTimeout(updateFollowButton, 120);
+    return;
+  }
+  if (!_userIsScrolling()) return;
   _scrollProgressTimer = setTimeout(updateProgressFromViewport, 120);
 }
 
@@ -2157,6 +2210,7 @@ async function reloadChapterInPlace() {
   const keep = currentSegIdx;
   const wasPlaying = isPlaying;
   const wasHighlighted = !!document.querySelector('#chapter-content .playing');
+  const wasLocked = _cursorLocked;
   const scroller = document.getElementById('chapter-content');
   const scrolls = [scroller.scrollTop, window.scrollY];
   await openChapter(chapter.id, {
@@ -2164,6 +2218,8 @@ async function reloadChapterInPlace() {
   });
   scroller.scrollTop = scrolls[0];
   window.scrollTo(0, scrolls[1]);
+  _cursorLocked = wasLocked;
+  updateFollowButton();
   if (wasPlaying) playSegment(keep);
 }
 
