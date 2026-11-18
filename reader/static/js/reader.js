@@ -46,6 +46,7 @@ let _progressSaveTimer = null;
 let _scrollProgressTimer = null;
 let _lastSavedProgressKey = '';
 let _ignoreScrollTrackingUntil = 0;
+let _followPlayback = true;   // playback scrolls to keep the current sentence centred; manual scrolling pauses this
 
 // Two audio elements for gapless double-buffering
 const _audioA = document.getElementById('tts-audio');
@@ -430,12 +431,14 @@ function toggleVoices() {
 // Double-click a sentence: start playing from it, whether or not anything was playing.
 function playFrom(idx) {
   window.getSelection()?.removeAllRanges();      // a double-click also selects the word under it
+  resumeFollow({ scroll: false });
   if (isPlaying && currentSegIdx === idx) return;   // its first click already started it
   playSegment(idx);
 }
 
 function jumpTo(idx, event) {
   if (event?.detail > 1) return;       // the second click of a double-click: playFrom() handles it
+  resumeFollow({ scroll: false });
   if (isPlaying) playSegment(idx);
   else { setCurrentSegment(idx, { highlight: true, save: true }); }
 }
@@ -1142,8 +1145,43 @@ function highlightSegment(idx, options = {}) {
     el.classList.toggle('spoken',  elIdx < idx);
   });
   const active = document.querySelector(`[data-idx="${idx}"]`);
-  if (active) active.scrollIntoView({ behavior, block: 'center' });
+  if (active && _followPlayback) active.scrollIntoView({ behavior, block: 'center' });
 }
+
+// ── Following playback ────────────────────────────────────────────────────────
+// While playing, the page scrolls to keep the current sentence centred. Scrolling by hand
+// (wheel, touch, scrollbar, page keys) pauses that, so you can read ahead or back without
+// being pulled away, and a button appears to return. Playing again, picking a sentence, or
+// the button resumes it. Anything not playing always follows.
+
+function suspendFollow() {
+  if (!isPlaying || !_followPlayback) return;
+  _followPlayback = false;
+  updateFollowButton();
+}
+
+function resumeFollow({ scroll = true } = {}) {
+  _followPlayback = true;
+  updateFollowButton();
+  if (scroll) highlightSegment(currentSegIdx);
+}
+
+function updateFollowButton() {
+  if (!isPlaying) _followPlayback = true;           // pausing or stopping ends a suspension
+  document.getElementById('follow-btn').classList.toggle('hidden', !isPlaying || _followPlayback);
+}
+
+(function wireManualScroll() {
+  const content = document.getElementById('chapter-content');
+  content.addEventListener('wheel', suspendFollow, { passive: true });
+  content.addEventListener('touchmove', suspendFollow, { passive: true });
+  // Dragging or clicking the scrollbar: the click lands on the scroller itself, beyond its content width.
+  content.addEventListener('pointerdown', e => { if (e.target === content && e.offsetX >= content.clientWidth) suspendFollow(); });
+  document.addEventListener('keydown', e => {
+    if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(e.key)
+        && !/^(input|textarea|select)$/i.test(document.activeElement.tagName)) suspendFollow();
+  });
+})();
 
 // ── Progress bar ──────────────────────────────────────────────────────────────
 
@@ -1167,6 +1205,7 @@ function updatePlaybackUI() {
     btn.innerHTML = '&#9654;';
     btn.classList.add('paused');
   }
+  updateFollowButton();
   if (chapter.segments.length) {
     prog.textContent = `${currentSegIdx + 1} / ${chapter.segments.length}`;
     if (fill) fill.style.width = `${((currentSegIdx + 1) / chapter.segments.length) * 100}%`;
@@ -1372,12 +1411,14 @@ document.getElementById('btn-stop').onclick = () => {
 };
 
 document.getElementById('btn-next-seg').onclick = () => {
+  resumeFollow({ scroll: false });
   const next = Math.min(currentSegIdx + 1, chapter.segments.length - 1);
   if (isPlaying) playSegment(next);
   else { setCurrentSegment(next, { highlight: true, save: true }); }
 };
 
 document.getElementById('btn-prev-seg').onclick = () => {
+  resumeFollow({ scroll: false });
   const prev = Math.max(currentSegIdx - 1, 0);
   if (isPlaying) playSegment(prev);
   else { setCurrentSegment(prev, { highlight: true, save: true }); }
@@ -1394,6 +1435,7 @@ document.getElementById('btn-next-ch').onclick = () => {
 
 document.getElementById('pb-seek-bar').onclick = (e) => {
   if (!chapter.segments.length) return;
+  resumeFollow({ scroll: false });
   const bar = e.currentTarget;
   const frac = Math.max(0, Math.min(1, e.offsetX / bar.offsetWidth));
   const targetIdx = Math.round(frac * (chapter.segments.length - 1));

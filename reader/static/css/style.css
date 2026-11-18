@@ -671,6 +671,12 @@ body.theme-paper .voice-swatch[style] {
 .bookmark-del:hover { color: #c88080; }
 
 /* ── Playback bar ───────────────────────────────────────────────────────────── */
+.follow-btn {
+  position: fixed; bottom: 78px; left: 50%; transform: translateX(-50%); z-index: 49;
+  background: var(--bg2); color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
+  padding: 6px 16px; font-size: 0.8rem; cursor: pointer; box-shadow: 0 4px 14px rgba(0, 0, 0, .3);
+}
+.follow-btn:hover { background: var(--bg3); }
 .playback-bar {
   position: fixed; bottom: 0; left: 0; right: 0; height: 64px;
   background: var(--bg2); border-top: 1px solid var(--border);
