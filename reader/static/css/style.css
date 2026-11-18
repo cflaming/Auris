@@ -566,6 +566,26 @@ body.theme-paper .sentence.overridden {
     color: color-mix(in srgb, var(--char-color, var(--text2)) 60%, black);
   }
 }
+/* Corrections page and other excerpt lists (cards built by excerpts.js; .diff-* styles are shared
+   with the new-character impact preview). */
+.corrections-summary { font-size: .85rem; color: var(--text2); margin-bottom: 12px; }
+.corrections-toolbar { margin-bottom: 18px; }
+.corrections-empty { color: var(--text3); font-size: .85rem; line-height: 1.6; max-width: 60ch; }
+.chapter-group { margin-bottom: 18px; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.chapter-group > summary {
+  display: flex; align-items: center; gap: 12px; cursor: pointer; padding: 8px 12px;
+  background: var(--bg3); color: var(--text); font-size: .85rem; list-style-position: inside;
+}
+.chapter-group-title { flex: 1; font-family: var(--font-family); }
+.chapter-group-actions { display: flex; gap: 8px; }
+.excerpt { padding: 10px 14px; border-top: 1px solid var(--border); }
+.excerpt .diff-text { margin: 2px 0 6px; }
+.excerpt .diff-line { display: inline-block; margin-right: 6px; }
+.excerpt-meta { margin-top: 6px; font-size: .72rem; display: flex; gap: 10px; align-items: center; }
+.excerpt-note { color: var(--text3); font-size: .72rem; }
+.excerpt-actions { margin-top: 8px; display: flex; gap: 8px; }
+.badge-status { border-radius: 3px; padding: 1px 6px; font-size: .7rem; }
+.badge-status.ignored, .badge-status.missing { background: rgba(200, 150, 60, .2); color: var(--text); }
 .voice-legend {
   display: flex; flex-wrap: wrap; gap: 6px 14px;
   /* Line up with the centred 760px text column of .chapter-content */

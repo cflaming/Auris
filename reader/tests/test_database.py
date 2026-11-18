@@ -92,3 +92,17 @@ def test_cascade_delete_still_works_after_migration(legacy_db):
     with db.get_conn() as conn:                                # get_conn enables foreign keys
         conn.execute("DELETE FROM books WHERE id=1")
         assert conn.execute("SELECT COUNT(*) FROM tts_segments").fetchone()[0] == 0
+
+
+def test_old_correction_tables_gain_the_context_columns(fresh_db):
+    with sqlite3.connect(fresh_db) as conn:                    # the table as it was before context was captured
+        conn.execute("DROP TABLE segment_speakers")
+        conn.execute("CREATE TABLE segment_speakers (book_id INTEGER NOT NULL, chapter_id INTEGER NOT NULL, "
+                     "anchor TEXT NOT NULL, character_name TEXT, PRIMARY KEY (book_id, chapter_id, anchor))")
+        conn.execute("INSERT INTO segment_speakers VALUES (1, 1, 'abc:0', 'Amy')")
+    db.init_db()
+    with sqlite3.connect(fresh_db) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM segment_speakers").fetchone()
+    assert {"detected_speaker", "text", "prev_text", "next_text", "paragraph_text", "created_at", "updated_at"} <= set(row.keys())
+    assert (row["anchor"], row["character_name"], row["text"]) == ("abc:0", "Amy", None)   # data kept, context empty

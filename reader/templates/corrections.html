@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Speaker corrections - {{ book.title }}{% endblock %}
+{% block content %}
+<div class="studio-page">
+  <div class="studio-header">
+    <a href="/voice-studio/{{ book.id }}" class="btn btn-sm btn-ghost">&#8592; Voice Studio</a>
+    <h1>Speaker corrections &mdash; <em>{{ book.title }}</em></h1>
+    <button class="btn btn-sm btn-ghost" id="download" title="Download every correction, with the detected speaker and surrounding text">Download JSON</button>
+  </div>
+
+  <div id="summary" class="corrections-summary">Loading&hellip;</div>
+  <div id="toolbar" class="corrections-toolbar" hidden>
+    <input id="filter" class="text-input" type="search" placeholder="Filter by text, speaker or chapter">
+  </div>
+  <div id="empty" class="corrections-empty" hidden>
+    Fix a speaker in the reader (click the speaker name in the playback bar, right-click a sentence, or press E) and it will be listed here.
+  </div>
+  <div id="corrections-list"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.BOOK_ID = {{ book.id }};</script>
+<script src="{{ asset('js/excerpts.js') }}"></script>
+<script src="{{ asset('js/corrections.js') }}"></script>
+{% endblock %}

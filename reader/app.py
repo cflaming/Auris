@@ -3,7 +3,7 @@ Offline Ebook Reader — Flask application.
 """
 
 import base64
-from collections import Counter
+from collections import Counter, defaultdict
 import email.utils
 import json
 import logging
@@ -189,6 +189,7 @@ def _startup():
         try:
             init_db()
             _backfill_character_frequencies()
+            _backfill_correction_context()
             _prune_stale_renders()
         except Exception:
             tts.load_async()
@@ -295,9 +296,11 @@ def _character_map(rows) -> dict:
     return char_map
 
 
-def _compute_segments_for_chapter(book_id: int, chapter_id: int, extra_characters=()) -> list[dict]:
+def _compute_segments_for_chapter(book_id: int, chapter_id: int, extra_characters=(),
+                                  apply_corrections: bool = True) -> list[dict]:
     """Segments for a chapter. extra_characters are hypothetical characters (dicts) added to
-    the book's own, used to preview what adding one would change."""
+    the book's own, used to preview what adding one would change. apply_corrections=False
+    gives what detection alone says, ignoring the user's speaker corrections."""
     with get_conn() as conn:
         ch = conn.execute(
             'SELECT * FROM chapters WHERE id=? AND book_id=?',
@@ -316,7 +319,7 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int, extra_character
                 'SELECT anchor, character_name FROM segment_speakers WHERE book_id=? AND chapter_id=?',
                 (book_id, chapter_id)
             )
-        }
+        } if apply_corrections else {}
 
     if not ch:
         return []
@@ -593,7 +596,9 @@ def voice_studio_page(book_id):
     book_data['narrator_instruct'] = _book_narrator_instruct(book_data)
     book_data['single_narrator_mode'] = _book_single_narrator_mode(book_data)
     book_data['expression_tags'] = _book_expression_tags(book_data)
-    return render_template('voice_studio.html', book=book_data)
+    with get_conn() as conn:
+        corrections = conn.execute('SELECT COUNT(*) FROM segment_speakers WHERE book_id=?', (book_id,)).fetchone()[0]
+    return render_template('voice_studio.html', book=book_data, corrections=corrections)
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -1303,6 +1308,44 @@ def get_segments(book_id, chapter_id):
     return jsonify([_segment_json(r) for r in rows])
 
 
+def _correction_context(book_id: int, chapter_id: int, rows, anchors: set) -> dict:
+    """anchor -> (detected_speaker, text, prev_text, next_text, paragraph_text) for the given
+    sentences: what detection alone says about each, and the text around it."""
+    detected = {s['anchor']: s['character_name']
+                for s in _compute_segments_for_chapter(book_id, chapter_id, apply_corrections=False)}
+    paragraphs = defaultdict(list)
+    for r in rows:
+        paragraphs[r['paragraph']].append(r['text'])
+    context = {}
+    for i, r in enumerate(rows):
+        if r['anchor'] in anchors:
+            context[r['anchor']] = (
+                detected.get(r['anchor']), r['text'],
+                rows[i - 1]['text'] if i else '', rows[i + 1]['text'] if i + 1 < len(rows) else '',
+                ' '.join(paragraphs[r['paragraph']]),
+            )
+    return context
+
+
+# A correction is also a labelled example, so the detection and context captured the first time
+# stay put when the same sentence is corrected again (only the speaker and updated_at change).
+_UPSERT_CORRECTION = '''
+INSERT INTO segment_speakers (book_id, chapter_id, anchor, character_name, detected_speaker, text,
+                              prev_text, next_text, paragraph_text, created_at, updated_at)
+VALUES (?,?,?,?,?,?,?,?,?, datetime('now'), datetime('now'))
+ON CONFLICT(book_id, chapter_id, anchor) DO UPDATE SET
+    character_name   = excluded.character_name,
+    updated_at       = datetime('now'),
+    detected_speaker = CASE WHEN segment_speakers.text IS NULL THEN excluded.detected_speaker
+                            ELSE segment_speakers.detected_speaker END,
+    text             = COALESCE(segment_speakers.text, excluded.text),
+    prev_text        = COALESCE(segment_speakers.prev_text, excluded.prev_text),
+    next_text        = COALESCE(segment_speakers.next_text, excluded.next_text),
+    paragraph_text   = COALESCE(segment_speakers.paragraph_text, excluded.paragraph_text),
+    created_at       = COALESCE(segment_speakers.created_at, excluded.created_at)
+'''
+
+
 @app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/speaker', methods=['PUT'])
 def set_chapter_speakers(book_id, chapter_id):
     """Correct who speaks the given sentences (identified by anchor).
@@ -1335,16 +1378,114 @@ def set_chapter_speakers(book_id, chapter_id):
                 [(book_id, chapter_id, a) for a in anchors]
             )
         else:
-            conn.executemany(
-                'INSERT OR REPLACE INTO segment_speakers (book_id, chapter_id, anchor, character_name) '
-                'VALUES (?,?,?,?)',
-                [(book_id, chapter_id, a, name) for a in anchors]
-            )
+            context = _correction_context(book_id, chapter_id, rows, set(anchors))
+            conn.executemany(_UPSERT_CORRECTION, [(book_id, chapter_id, a, name, *context[a]) for a in anchors])
         # Invalidate the chapter; its segments rebuild (with the corrections applied)
         # on the next read, and unchanged sentences come back from the WAV cache.
         conn.execute('DELETE FROM tts_segments WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))
     _clear_chapter_renders(book_id, chapter_id)
     return jsonify({'ok': True, 'updated': len(anchors)})
+
+
+def _backfill_correction_context():
+    """Corrections made before context was captured: fill it in from the current chapter text
+    (and what detection alone says). Sentences that no longer exist are left as they are."""
+    with get_conn() as conn:
+        pending = conn.execute(
+            'SELECT book_id, chapter_id, anchor FROM segment_speakers WHERE text IS NULL').fetchall()
+    by_chapter = defaultdict(set)
+    for r in pending:
+        by_chapter[(r['book_id'], r['chapter_id'])].add(r['anchor'])
+    for (book_id, chapter_id), anchors in by_chapter.items():
+        try:
+            with _get_chapter_build_lock(book_id, chapter_id):
+                rows = _ensure_chapter_segments(book_id, chapter_id)
+            context = _correction_context(book_id, chapter_id, rows, anchors)
+            with get_conn() as conn:
+                conn.executemany(
+                    'UPDATE segment_speakers SET detected_speaker=?, text=?, prev_text=?, next_text=?, '
+                    'paragraph_text=? WHERE book_id=? AND chapter_id=? AND anchor=? AND text IS NULL',
+                    [(*ctx, book_id, chapter_id, anchor) for anchor, ctx in context.items()])
+        except Exception:
+            log.exception('Could not backfill correction context for chapter %s', chapter_id)
+
+
+def _list_corrections(book_id: int) -> list[dict]:
+    """Every speaker correction in the book, in reading order, with its status:
+    active, ignored (its character no longer exists) or missing (the sentence no longer exists)."""
+    with get_conn() as conn:
+        rows = conn.execute(
+            'SELECT sp.*, c.title AS chapter_title FROM segment_speakers sp '
+            'JOIN chapters c ON c.id = sp.chapter_id WHERE sp.book_id=? ORDER BY c.order_num, sp.created_at',
+            (book_id,)).fetchall()
+        known = {r['name'] for r in conn.execute('SELECT name FROM characters WHERE book_id=?', (book_id,))}
+    by_chapter = defaultdict(list)
+    for r in rows:
+        by_chapter[r['chapter_id']].append(r)
+
+    out = []
+    for chapter_id, items in by_chapter.items():
+        current = {s['anchor']: (i, s) for i, s in enumerate(_compute_segments_for_chapter(book_id, chapter_id))}
+        chapter_items = []
+        for r in items:
+            index, seg = current.get(r['anchor'], (None, None))
+            if seg is None:
+                status = 'missing'
+            elif r['character_name'] is not None and r['character_name'] not in known:
+                status = 'ignored'
+            else:
+                status = 'active'
+            chapter_items.append({
+                'chapter_id': chapter_id, 'chapter_title': r['chapter_title'], 'anchor': r['anchor'],
+                'segment_index': index, 'status': status,
+                'text': r['text'] if r['text'] is not None else (seg['text'] if seg else None),
+                'prev_text': r['prev_text'], 'next_text': r['next_text'], 'paragraph_text': r['paragraph_text'],
+                'detected_speaker': r['detected_speaker'], 'corrected_speaker': r['character_name'],
+                'context_captured': r['text'] is not None,
+                'created_at': r['created_at'], 'updated_at': r['updated_at'],
+            })
+        chapter_items.sort(key=lambda c: (c['segment_index'] is None, c['segment_index'] or 0))
+        out.extend(chapter_items)
+    return out
+
+
+@app.route('/api/books/<int:book_id>/corrections')
+def list_corrections(book_id):
+    return jsonify(_list_corrections(book_id))
+
+
+@app.route('/api/books/<int:book_id>/corrections', methods=['DELETE'])
+def delete_corrections(book_id):
+    """Reset corrections: given anchors of one chapter, or all of that chapter's if anchors is omitted.
+    Works for corrections whose sentence no longer exists, which the speaker route can't reach."""
+    body = request.get_json(silent=True) or {}
+    chapter_id, anchors = body.get('chapter_id'), body.get('anchors')
+    if not isinstance(chapter_id, int) or isinstance(chapter_id, bool):
+        return jsonify({'error': 'chapter_id is required'}), 400
+    if anchors is not None and not isinstance(anchors, list):
+        return jsonify({'error': 'anchors must be a list'}), 400
+    with get_conn() as conn:
+        if anchors is None:
+            deleted = conn.execute('DELETE FROM segment_speakers WHERE book_id=? AND chapter_id=?',
+                                   (book_id, chapter_id)).rowcount
+        else:
+            deleted = sum(conn.execute(
+                'DELETE FROM segment_speakers WHERE book_id=? AND chapter_id=? AND anchor=?',
+                (book_id, chapter_id, a)).rowcount for a in dict.fromkeys(anchors))
+        if deleted:
+            conn.execute('DELETE FROM tts_segments WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))
+    if not deleted:
+        return jsonify({'error': 'No matching corrections'}), 404
+    _clear_chapter_renders(book_id, chapter_id)
+    return jsonify({'ok': True, 'deleted': deleted})
+
+
+@app.route('/corrections/<int:book_id>')
+def corrections_page(book_id):
+    book = _load_book(book_id)
+    if not book:
+        return 'Book not found', 404
+    return render_template('corrections.html', book=dict(book))
 
 
 def _store_segments(book_id, chapter_id, segs):

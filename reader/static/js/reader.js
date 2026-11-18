@@ -223,6 +223,20 @@ async function loadTOC() {
       </div>`;
   }).join('');
 
+  // A link like /reader/1?chapter=35&segment=12 (from the corrections page) opens that sentence.
+  const params = new URLSearchParams(location.search);
+  const linkedChapterId = Number.parseInt(params.get('chapter'), 10);
+  if (chapters.some(ch => ch.id === linkedChapterId)) {
+    history.replaceState(null, '', location.pathname);        // so a reload goes back to normal
+    openChapter(linkedChapterId, {
+      resumePosition: Number.parseInt(params.get('segment'), 10) || 0,
+      persistOpened: false,
+      highlightOnLoad: true,
+    });
+    loadBookmarks();
+    return;
+  }
+
   const prog = await fetch(`/api/books/${BOOK_ID}/progress`).then(r => r.json());
   const savedChapterId = Number.parseInt(prog.chapter_id, 10);
   const savedPosition = Number.parseInt(prog.position, 10);

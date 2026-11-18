@@ -5,6 +5,7 @@
   <div class="studio-header">
     <a href="/reader/{{ book.id }}" class="btn btn-sm btn-ghost">&#8592; Reader</a>
     <h1>Voice Studio &mdash; <em>{{ book.title }}</em></h1>
+    <a href="/corrections/{{ book.id }}" class="btn btn-sm btn-ghost" title="Every speaker you have corrected in this book">Speaker corrections{% if corrections %} ({{ corrections }}){% endif %} &#8594;</a>
   </div>
 
   <div class="studio-narrator">

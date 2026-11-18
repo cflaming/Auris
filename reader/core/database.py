@@ -101,6 +101,16 @@ def init_db():
             chapter_id     INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
             anchor         TEXT NOT NULL,
             character_name TEXT,
+            -- Captured when the correction is first made, so a correction is also a labelled
+            -- example (what detection said, what is right, and the surrounding text).
+            -- text IS NULL means the context was never captured (rows from before this existed).
+            detected_speaker TEXT,
+            text           TEXT,
+            prev_text      TEXT,
+            next_text      TEXT,
+            paragraph_text TEXT,
+            created_at     TEXT,
+            updated_at     TEXT,
             PRIMARY KEY (book_id, chapter_id, anchor)
         );
 
@@ -156,6 +166,14 @@ def init_db():
         }
         if "generation_sec" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
+        speaker_cols = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(segment_speakers)").fetchall()
+        }
+        for col in ("detected_speaker", "text", "prev_text", "next_text", "paragraph_text",
+                    "created_at", "updated_at"):
+            if col not in speaker_cols:
+                conn.execute(f"ALTER TABLE segment_speakers ADD COLUMN {col} TEXT")
         if "span" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN span INTEGER DEFAULT 0")
         if "overridden" not in seg_cols:
