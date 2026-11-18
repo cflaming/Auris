@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 
 from core.database import init_db, get_conn
 from core.base_engine import SAMPLE_RATE
-from core.tts_engine import TTSEngine
+from core.engine_manager import ENGINES, EngineManager
 from core import characters as char_module
 from core import enrichment, exporter, structure, settings as app_settings
 from core.enrichment import ENRICHMENT_VERSION
@@ -66,14 +66,7 @@ def _clear_chapter_renders(book_id: int | None = None):
             except OSError: pass
 
 
-def _make_engine():
-    if app_settings.get('tts_engine', 'kokoro') == 'omnivoice':
-        return TTSEngine()
-    from core.kokoro_engine import KokoroEngine
-    return KokoroEngine()
-
-
-tts = _make_engine()
+tts = EngineManager()
 
 DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 
@@ -1769,7 +1762,6 @@ def get_settings():
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
-    global tts
     body = request.get_json(force=True) or {}
     previous = app_settings.load()
     allowed = {
@@ -1778,11 +1770,11 @@ def save_settings():
         'subtitle_format', 'theme', 'font_size', 'font_family', 'line_height',
     }
     updates = {k: v for k, v in body.items() if k in allowed}
+    if 'tts_engine' in updates and updates['tts_engine'] not in ENGINES:
+        return jsonify({'error': f"Unknown TTS engine: {updates['tts_engine']}"}), 400
     result = app_settings.save(updates)
 
-    if 'tts_engine' in updates and updates['tts_engine'] != previous.get('tts_engine'):
-        tts = _make_engine()
-        tts.load_async()
+    if 'tts_engine' in updates and tts.set_engine(updates['tts_engine']):
         _clear_chapter_renders()
 
     tts.apply_settings(updates)

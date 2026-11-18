@@ -31,6 +31,7 @@ class BaseEngine:
         self._loading = False
         self._ready = False
         self._error: str | None = None
+        self._closed = False
         os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
 
     # ── lifecycle ────────────────────────────────────────────────────────
@@ -52,7 +53,14 @@ class BaseEngine:
     def load_async(self):
         if self._ready or self._loading:
             return
-        threading.Thread(target=self._load, daemon=True).start()
+        if self._closed:
+            return
+        threading.Thread(target=self._run_load, daemon=True).start()
+
+    def _run_load(self):
+        self._load()
+        if self._closed:  # closed while loading: don't keep the model alive
+            self.close()
 
     def reload(self):
         with self._lock:
@@ -60,6 +68,26 @@ class BaseEngine:
             self._error = None
             self._unload()
         self.load_async()
+
+    def close(self):
+        """Permanently shut this engine down and free its model.
+
+        Takes the lock, so it waits for any in-flight synthesis call.
+        """
+        self._closed = True
+        with self._lock:
+            self._ready = False
+            self._unload()
+        import gc
+        gc.collect()
+        try:
+            import torch
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            if torch.backends.mps.is_available():
+                torch.mps.empty_cache()
+        except Exception:
+            pass
 
     def _load(self):
         raise NotImplementedError
