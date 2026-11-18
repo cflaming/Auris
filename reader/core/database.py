@@ -24,10 +24,36 @@ def get_conn():
         conn.close()
 
 
+def _tts_segments_ddl(table: str) -> str:
+    """Schema for the segment table. cache_key is deliberately not UNIQUE: identical
+    sentences (same text and voice) in different places share a key."""
+    return f"""CREATE TABLE {table} (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            book_id       INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            chapter_id    INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+            segment_index INTEGER NOT NULL,
+            text          TEXT NOT NULL,
+            enriched_text TEXT NOT NULL,
+            character_name TEXT,
+            instruct      TEXT,
+            speed         REAL DEFAULT 1.0,
+            is_dialogue   INTEGER DEFAULT 0,
+            paragraph     INTEGER DEFAULT 0,
+            span          INTEGER DEFAULT 0,
+            anchor        TEXT,
+            overridden    INTEGER DEFAULT 0,
+            audio_path    TEXT,
+            duration_sec  REAL,
+            cache_key     TEXT,
+            generation_sec REAL,
+            engine_tag    TEXT
+        )"""
+
+
 def init_db():
     os.makedirs(os.path.dirname(get_db_path()), exist_ok=True)
     with get_conn() as conn:
-        conn.executescript("""
+        conn.executescript(f"""
         CREATE TABLE IF NOT EXISTS books (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             title       TEXT NOT NULL,
@@ -84,23 +110,7 @@ def init_db():
             updated_at TEXT DEFAULT (datetime('now'))
         );
 
-        CREATE TABLE IF NOT EXISTS tts_segments (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            book_id       INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-            chapter_id    INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
-            segment_index INTEGER NOT NULL,
-            text          TEXT NOT NULL,
-            enriched_text TEXT NOT NULL,
-            character_name TEXT,
-            instruct      TEXT,
-            speed         REAL DEFAULT 1.0,
-            is_dialogue   INTEGER DEFAULT 0,
-            paragraph       INTEGER DEFAULT 0,
-            audio_path      TEXT,
-            duration_sec    REAL,
-            cache_key       TEXT UNIQUE,
-            generation_sec  REAL
-        );
+        {_tts_segments_ddl('IF NOT EXISTS tts_segments')};
 
         CREATE TABLE IF NOT EXISTS bookmarks (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,43 +173,40 @@ def init_db():
         if "enrichment_version" not in ch_cols:
             conn.execute("ALTER TABLE chapters ADD COLUMN enrichment_version INTEGER DEFAULT 0")
 
-    # Remove UNIQUE constraint from tts_segments.cache_key so identical sentences
-    # in different chapters don't cause INSERT OR IGNORE to silently drop segments.
-    import sqlite3 as _sqlite3
-    import logging as _logging
-    _mc = _sqlite3.connect(get_db_path())
-    _mc.row_factory = _sqlite3.Row
+    _drop_cache_key_unique()
+
+
+def _drop_cache_key_unique():
+    """Older databases created tts_segments.cache_key as UNIQUE, so identical sentences
+    in different chapters collided. Rebuild such a table without the constraint,
+    copying columns by name so it works whatever columns the old table has."""
+    import logging
+    import sqlite3
+    conn = sqlite3.connect(get_db_path(), isolation_level=None)  # manual transaction
+    conn.row_factory = sqlite3.Row
     try:
-        tbl = _mc.execute(
+        row = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='tts_segments'"
         ).fetchone()
-        if tbl and 'UNIQUE' in (tbl['sql'] or '').upper():
-            _mc.executescript("""
-                PRAGMA foreign_keys=OFF;
-                DROP TABLE IF EXISTS tts_segments_new;
-                CREATE TABLE tts_segments_new (
-                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                    book_id       INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-                    chapter_id    INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
-                    segment_index INTEGER NOT NULL,
-                    text          TEXT NOT NULL,
-                    enriched_text TEXT NOT NULL,
-                    character_name TEXT,
-                    instruct      TEXT,
-                    speed         REAL DEFAULT 1.0,
-                    is_dialogue   INTEGER DEFAULT 0,
-                    audio_path    TEXT,
-                    duration_sec  REAL,
-                    cache_key     TEXT
-                );
-                INSERT INTO tts_segments_new SELECT * FROM tts_segments;
-                DROP TABLE tts_segments;
-                ALTER TABLE tts_segments_new RENAME TO tts_segments;
-                PRAGMA foreign_keys=ON;
-            """)
-    except Exception as _e:
-        _logging.getLogger(__name__).warning(
-            "cache_key UNIQUE migration failed (non-fatal): %s", _e
-        )
+        if not row or "UNIQUE" not in (row["sql"] or "").upper():
+            return
+        old_cols = [r["name"] for r in conn.execute("PRAGMA table_info(tts_segments)")]
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        try:
+            conn.execute("ALTER TABLE tts_segments RENAME TO tts_segments_old")
+            conn.execute(_tts_segments_ddl("tts_segments"))
+            new_cols = {r["name"] for r in conn.execute("PRAGMA table_info(tts_segments)")}
+            shared = ", ".join(c for c in old_cols if c in new_cols)
+            conn.execute(f"INSERT INTO tts_segments ({shared}) SELECT {shared} FROM tts_segments_old")
+            conn.execute("DROP TABLE tts_segments_old")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+        finally:
+            conn.execute("PRAGMA foreign_keys=ON")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("cache_key UNIQUE migration failed (non-fatal): %s", exc)
     finally:
-        _mc.close()
+        conn.close()
