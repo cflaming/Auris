@@ -734,13 +734,15 @@ body.theme-paper .voice-swatch[style] {
 .speaker-text .sp-sent.target { font-weight: 600; }
 .speaker-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 /* The speaker list is part of the dialog and always shown, at a fixed height so that picking a name or
-   filtering never changes the dialog's size and the Apply button stays where the mouse is. */
+   filtering never changes the dialog's size and the Apply button stays where the mouse is. It is as
+   tall as fits: the rest of the dialog is about 500px, so on a short window the list gives up height
+   (down to a floor) before the dialog has to scroll. */
 .combo-list {
-  height: 24em; overflow: auto; margin: 0; padding: 3px 0; list-style: none;
+  height: var(--list-h, clamp(9em, calc(100vh - 504px), 24em)); overflow: auto; margin: 0; padding: 3px 0; list-style: none;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
 }
 .combo-list:focus-visible { outline: 1px solid var(--accent); }
-@media (max-width: 699px), (hover: none) { .combo-list { height: 14em; } }
+@media (max-width: 699px), (hover: none) { .combo-list { height: clamp(7em, calc(100vh - 504px), 14em); } }
 /* The search box takes the place of the heading row, at the same height, so showing it never moves anything. */
 .speaker-head, .speaker-field .text-input { height: 32px; box-sizing: border-box; margin: 0; }
 .speaker-head { display: flex; align-items: center; gap: 8px; }
@@ -1361,3 +1363,11 @@ body.theme-paper .voice-swatch[style] {
 .speaker-debug .text-input { width: 100%; height: auto; font-family: 'Courier New', monospace; font-size: 0.75rem; line-height: 1.45; resize: none; margin-bottom: 14px; }
 .speaker-modal.showing-debug .modal-body,
 .speaker-modal.showing-debug #speaker-footer { display: none; }
+
+/* Wide screens: the paragraph (and what the change applies to) on the left, the speaker chooser on the
+   right, so neither has to be squeezed to fit a short window. */
+@media (min-width: 900px) and (hover: hover) {
+  .modal.speaker-modal { max-width: 860px; --list-h: clamp(9em, calc(100vh - 300px), 30em); }
+  .speaker-cols { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: 24px; align-items: start; }
+  .speaker-cols .speaker-text { max-height: var(--list-h); margin-bottom: 18px; }
+}

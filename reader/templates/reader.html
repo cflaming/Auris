@@ -170,32 +170,36 @@
 <div class="modal-overlay hidden" id="speaker-modal" onclick="if (event.target === this) closeSpeakerEditor()">
   <div class="modal speaker-modal">
     <div class="modal-title">Who&#8217;s speaking?</div>
-    <div class="modal-body">
-      <div class="speaker-text" id="speaker-text"></div>
-      <div class="speaker-field">
-        <div class="speaker-head" id="speaker-head">
-          <span>Speaker</span> <b id="speaker-current"></b>
-          <button type="button" class="btn btn-sm btn-ghost" onclick="revealSpeakerSearch()" title="Search the list (or just start typing)">Search</button>
+    <div class="modal-body speaker-cols">
+      <div class="speaker-col-context">
+        <div class="speaker-text" id="speaker-text"></div>
+        <fieldset class="speaker-scope">
+          <legend>Apply to</legend>
+          <label><input type="radio" name="speaker-scope" value="segment" checked onchange="renderSpeakerPreview()"> This sentence</label>
+          <label><input type="radio" name="speaker-scope" value="quote" onchange="renderSpeakerPreview()"> This quote <span id="speaker-quote-n"></span></label>
+          <label><input type="radio" name="speaker-scope" value="paragraph" onchange="renderSpeakerPreview()"> Whole paragraph <span id="speaker-para-n"></span></label>
+        </fieldset>
+      </div>
+      <div class="speaker-col-pick">
+        <div class="speaker-field">
+          <div class="speaker-head" id="speaker-head">
+            <span>Speaker</span> <b id="speaker-current"></b>
+            <button type="button" class="btn btn-sm btn-ghost" onclick="revealSpeakerSearch()" title="Search the list (or just start typing)">Search</button>
+          </div>
+          <input id="speaker-input" class="text-input hidden" type="text" autocomplete="off" spellcheck="false"
+                 aria-label="Search speakers" placeholder="Search…">
+          <ul id="speaker-list" class="combo-list" role="listbox" tabindex="0" aria-label="Speakers"></ul>
         </div>
-        <input id="speaker-input" class="text-input hidden" type="text" autocomplete="off" spellcheck="false"
-               aria-label="Search speakers" placeholder="Search…">
-        <ul id="speaker-list" class="combo-list" role="listbox" tabindex="0" aria-label="Speakers"></ul>
+        <div class="speaker-new hidden" id="speaker-new">
+          <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name" oninput="scheduleImpactPreview()">
+          <select id="speaker-new-gender" class="select-input" onchange="scheduleImpactPreview()">
+            <option value="unknown">Gender: unknown</option>
+            <option value="female">Female</option>
+            <option value="male">Male</option>
+          </select>
+        </div>
+        <div class="speaker-impact hidden" id="speaker-impact"></div>
       </div>
-      <div class="speaker-new hidden" id="speaker-new">
-        <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name" oninput="scheduleImpactPreview()">
-        <select id="speaker-new-gender" class="select-input" onchange="scheduleImpactPreview()">
-          <option value="unknown">Gender: unknown</option>
-          <option value="female">Female</option>
-          <option value="male">Male</option>
-        </select>
-      </div>
-      <div class="speaker-impact hidden" id="speaker-impact"></div>
-      <fieldset class="speaker-scope">
-        <legend>Apply to</legend>
-        <label><input type="radio" name="speaker-scope" value="segment" checked onchange="renderSpeakerPreview()"> This sentence</label>
-        <label><input type="radio" name="speaker-scope" value="quote" onchange="renderSpeakerPreview()"> This quote <span id="speaker-quote-n"></span></label>
-        <label><input type="radio" name="speaker-scope" value="paragraph" onchange="renderSpeakerPreview()"> Whole paragraph <span id="speaker-para-n"></span></label>
-      </fieldset>
     </div>
     <div class="speaker-debug hidden" id="speaker-debug">
       <div class="speaker-debug-note">Paste this into a bug report or a chat with a developer. It points at this exact sentence.</div>
