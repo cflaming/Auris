@@ -1887,7 +1887,7 @@ document.addEventListener('keydown', e => {
       showShortcuts();
       break;
     case 'Escape':
-      closeSpeakerEditor();
+      pressEscapeButton();
       hideShortcuts();
       document.getElementById('export-dropdown').classList.add('hidden');
       break;
@@ -2000,6 +2000,14 @@ async function copySpeakerDebug() {
     if (!document.execCommand?.('copy')) { showToast('Could not copy: the text is selected, copy it by hand', 'err'); return; }
   }
   showToast('Copied');
+}
+
+// Each layer of the override dialog marks its way out (Cancel, Back) with data-escape; Escape presses
+// the one that is showing.
+function pressEscapeButton() {
+  const modal = document.getElementById('speaker-modal');
+  if (modal.classList.contains('hidden')) return;
+  [...modal.querySelectorAll('[data-escape]')].find(b => b.offsetParent !== null)?.click();
 }
 
 function closeSpeakerEditor() {
@@ -2247,6 +2255,14 @@ function moveSpeakerActive(step) {
   // Keys anywhere in the dialog (the box is hidden, so focus is usually on the list): typing starts
   // a search, arrows move through the list, Enter picks the highlighted name.
   modal.addEventListener('keydown', e => {
+    // Escape does what the visible Cancel/Back button does. (The page-wide handler skips text boxes,
+    // so it is handled here; in the search box it only leaves the search.)
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      if (e.target === input) { resetSpeakerSearch(); list.focus(); }
+      else pressEscapeButton();
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const inSearch = e.target === input;
     if (!inSearch && isTextField(e.target)) return;                      // the new-character fields etc.
