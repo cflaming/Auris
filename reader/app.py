@@ -166,11 +166,24 @@ def _startup():
             return
         try:
             init_db()
+            _sync_audio_cache_tag()
         except Exception:
             tts.load_async()
             raise
         tts.load_async()
         _startup_complete = True
+
+
+def _sync_audio_cache_tag():
+    """Drop stored segment audio and chapter renders made by a different engine
+    or an older version of this engine's output processing."""
+    tag = tts.cache_tag
+    if app_settings.get('tts_cache_tag') == tag:
+        return
+    with get_conn() as conn:
+        conn.execute('UPDATE tts_segments SET audio_path=NULL, duration_sec=NULL, generation_sec=NULL')
+    _clear_chapter_renders()
+    app_settings.save({'tts_cache_tag': tag})
 
 
 def _default_narrator_instruct() -> str:
@@ -1770,16 +1783,14 @@ def save_settings():
         'subtitle_format', 'theme', 'font_size', 'font_family', 'line_height',
     }
     updates = {k: v for k, v in body.items() if k in allowed}
-    engine_switched = False
     if 'tts_engine' in updates:
         try:  # switch first so an invalid/unloadable engine is never persisted
-            engine_switched = tts.set_engine(updates['tts_engine'])
+            tts.set_engine(updates['tts_engine'])
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
     result = app_settings.save(updates)
 
-    if engine_switched:
-        _clear_chapter_renders()
+    _sync_audio_cache_tag()
 
     tts.apply_settings(updates)
 

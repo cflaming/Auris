@@ -26,6 +26,9 @@ _SILENCE_FALLBACK_FRAMES = int(0.3 * SAMPLE_RATE)
 
 class BaseEngine:
     engine_name = ""
+    # Identifies the audio this engine produces. Segment audio recorded under a
+    # different tag is stale (other engine, or changed output processing).
+    cache_tag = ""
 
     def __init__(self):
         self._lock = threading.Lock()

@@ -15,7 +15,7 @@ import re
 
 import numpy as np
 
-from core.base_engine import BaseEngine
+from core.base_engine import SAMPLE_RATE, BaseEngine
 from core.instruct import parse_instruct
 
 log = logging.getLogger(__name__)
@@ -36,7 +36,23 @@ _BRITISH = {
                "high": ["bf_isabella", "bf_lily"]},
 }
 
+# Kokoro pads every clip with ~0.4s of leading and ~0.5s of trailing silence, which
+# adds up to a long gap between segments. Trim to the speech and keep a short pad.
+_SILENCE_THRESHOLD = 0.004   # |amplitude| below this counts as silence
+_LEAD_PAD_SEC = 0.04
+_TAIL_PAD_SEC = 0.15
+_CACHE_VERSION = 2           # bump when output processing changes (invalidates cached WAVs)
+
 _TAG_RE = re.compile(r"\[[A-Za-z][A-Za-z\- ]*\]")  # OmniVoice expression tags, e.g. [laughter]
+
+
+def trim_silence(audio: np.ndarray) -> np.ndarray:
+    loud = np.flatnonzero(np.abs(audio) > _SILENCE_THRESHOLD)
+    if loud.size == 0:
+        return audio
+    start = max(0, loud[0] - int(_LEAD_PAD_SEC * SAMPLE_RATE))
+    end = min(len(audio), loud[-1] + 1 + int(_TAIL_PAD_SEC * SAMPLE_RATE))
+    return audio[start:end]
 
 
 @functools.lru_cache(maxsize=256)
@@ -58,6 +74,7 @@ def pick_voice(instruct: str | None) -> str:
 
 class KokoroEngine(BaseEngine):
     engine_name = "kokoro"
+    cache_tag = f"kokoro:{_CACHE_VERSION}"
 
     def __init__(self):
         super().__init__()
@@ -100,7 +117,7 @@ class KokoroEngine(BaseEngine):
     @staticmethod
     def cache_key(text, instruct, ref_audio, speed, ref_text=None) -> str:
         voice = pick_voice(instruct)
-        payload = f"kokoro|{voice}|{text}|{speed:.2f}"
+        payload = f"kokoro{_CACHE_VERSION}|{voice}|{text}|{speed:.2f}"
         return hashlib.md5(payload.encode("utf-8")).hexdigest()
 
     def _resolve_item(self, text, instruct, ref_audio, speed, ref_text=None, vd_cache=None):
@@ -119,4 +136,4 @@ class KokoroEngine(BaseEngine):
             pipe = self._pipeline(voice[0])
             chunks = [np.asarray(a, dtype=np.float32).reshape(-1)
                       for _, _, a in pipe(clean, voice=voice, speed=speed) if a is not None]
-        return np.concatenate(chunks) if chunks else np.zeros(0, dtype=np.float32)
+        return trim_silence(np.concatenate(chunks)) if chunks else np.zeros(0, dtype=np.float32)
