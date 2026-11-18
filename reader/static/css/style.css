@@ -727,6 +727,21 @@ body.theme-paper .voice-swatch[style] {
 }
 .speaker-text .sp-sent.target { font-weight: 600; }
 .speaker-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.combo { position: relative; }
+.combo .text-input { width: 100%; }
+.combo-list {
+  position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 5;
+  max-height: 14em; overflow: auto; margin: 0; padding: 3px 0; list-style: none;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
+}
+.combo-list li { padding: 5px 10px; cursor: pointer; display: flex; align-items: baseline; gap: 8px; }
+.combo-list li.active { background: var(--bg3); }
+.combo-list li.heading { cursor: default; font-size: 0.68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); padding-top: 7px; }
+.combo-list li.empty { cursor: default; color: var(--text3); }
+.combo-list .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
+.combo-list .sub { color: var(--text3); font-size: 0.78rem; }
+.combo-list .new-row { color: var(--accent); }
 .speaker-new { display: flex; gap: 8px; margin-bottom: 10px; }
 .speaker-new .text-input { flex: 1; }
 /* What adding a new character would change, as a summary plus a diff of the sentences. */

@@ -20,6 +20,7 @@ let currentTheme    = localStorage.getItem('theme') || 'night';
 let showVoices      = localStorage.getItem('showVoices') !== '0';
 let showGutter      = localStorage.getItem('showGutter') !== '0';   // speaker names in the margin (wide windows)
 let charColors      = {};   // character name -> #RRGGBB
+let charList        = [];   // the book's characters in Voice Studio order (merged ones follow their group's head)
 
 // ── MSE (MediaSource Extensions) — primary audio path ────────────────────────
 // Falls back to WAV-per-segment if browser lacks MSE for AAC MP4.
@@ -309,6 +310,7 @@ async function openChapter(chapterId, options = {}) {
   _seedAudioCache(segs);
   // Pre-populate durations from API data so resume-offset calculation is accurate
   segs.forEach((s, i) => { if (s.duration_sec) ch.durations[i] = s.duration_sec; });
+  charList = chars;
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
   renderContent(segs);
 
@@ -361,7 +363,7 @@ function renderContent(segs) {
     const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '')
               + (startsRun ? ' speaker-start' : '');
     const tip = (name || 'Narrator') + (seg.overridden ? ' (corrected)' : '');
-    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
+    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i}, event)" ondblclick="playFrom(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
   };
 
   // The margin names a speaker where their lines begin in a paragraph, not on every sentence.
@@ -425,7 +427,15 @@ function toggleVoices() {
   showToast(showVoices ? 'Voices shown' : 'Voices hidden');
 }
 
-function jumpTo(idx) {
+// Double-click a sentence: start playing from it, whether or not anything was playing.
+function playFrom(idx) {
+  window.getSelection()?.removeAllRanges();      // a double-click also selects the word under it
+  if (isPlaying && currentSegIdx === idx) return;   // its first click already started it
+  playSegment(idx);
+}
+
+function jumpTo(idx, event) {
+  if (event?.detail > 1) return;       // the second click of a double-click: playFrom() handles it
   if (isPlaying) playSegment(idx);
   else { setCurrentSegment(idx, { highlight: true, save: true }); }
 }
@@ -1740,12 +1750,10 @@ function openSpeakerEditor(idx = currentSegIdx) {
   if (!seg || !seg.text) { showToast('Nothing to correct here', 'err'); return; }
   _speakerEditIdx = idx;
 
-  const names = Object.keys(charColors).sort((a, b) => a.localeCompare(b));
-  const option = (value, label) =>
-    `<option value="${esc(value)}"${value === (seg.character_name || '') ? ' selected' : ''}>${esc(label)}</option>`;
-  document.getElementById('speaker-select').innerHTML =
-    option('', 'Narrator') + names.map(n => option(n, n)).join('') +
-    '<option value="__new__">+ New character…</option>';
+  _speakerChoice = seg.character_name || '';
+  _speakerTyped = false;
+  document.getElementById('speaker-input').value = _speakerChoice || 'Narrator';
+  hideSpeakerList();
 
   const n = scope => _speakerScopeIndices(idx, scope).length;
   document.getElementById('speaker-quote-n').textContent = `(${n('quote')} sentence${n('quote') === 1 ? '' : 's'})`;
@@ -1762,8 +1770,7 @@ function renderSpeakerPreview() {
   const idx = _speakerEditIdx;
   if (idx < 0) return;
   const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
-  const picked = document.getElementById('speaker-select').value;
-  const color = picked && picked !== '__new__' ? charColors[picked] : '';
+  const color = _speakerChoice && _speakerChoice !== '__new__' ? charColors[_speakerChoice] : '';
   const affected = new Set(_speakerScopeIndices(idx, scope));
   const para = chapter.segments[idx].paragraph;
   const box = document.getElementById('speaker-text');
@@ -1777,6 +1784,7 @@ function renderSpeakerPreview() {
 }
 
 function closeSpeakerEditor() {
+  hideSpeakerList();
   document.getElementById('speaker-modal').classList.add('hidden');
   _speakerEditIdx = -1;
   resetImpactPreview();
@@ -1800,7 +1808,7 @@ function resetImpactPreview() {
 function scheduleImpactPreview() {
   clearTimeout(_impactTimer);
   const name = document.getElementById('speaker-new-name').value.trim();
-  if (document.getElementById('speaker-select').value !== '__new__' || !name) {
+  if (_speakerChoice !== '__new__' || !name) {
     resetImpactPreview();
     return;
   }
@@ -1868,18 +1876,177 @@ function renderImpact(d) {
 }
 
 function onSpeakerSelectChange() {
-  const isNew = document.getElementById('speaker-select').value === '__new__';
+  const isNew = _speakerChoice === '__new__';
   document.getElementById('speaker-new').classList.toggle('hidden', !isNew);
-  if (isNew) document.getElementById('speaker-new-name').focus();
   renderSpeakerPreview();
   scheduleImpactPreview();
+}
+
+// ── Speaker picker ────────────────────────────────────────────────────────────
+// A text box with a list under it. Empty (or just opened) it shows everyone: the narrator,
+// then the characters speaking close to this sentence, nearest first, then the rest in Voice
+// Studio's order. A character that is merged into another is not listed on its own; its group
+// is (under the head's name), and typing the merged name still finds the group.
+
+let _speakerChoice = '';        // '' = narrator, '__new__', or a character name
+let _speakerTyped = false;      // the box holds something the user typed, so the list is filtered by it
+let _speakerRows = [];          // what the list shows
+let _speakerActive = -1;        // index in _speakerRows of the highlighted row
+const SPEAKERS_NEARBY = 5;
+
+function _speakerCandidates(idx) {
+  const byName = new Map(charList.map(c => [c.name, c]));
+  const headOf = name => {
+    const c = byName.get(name);
+    return c?.alias_of != null ? (charList.find(h => h.id === c.alias_of)?.name || name) : name;
+  };
+  const heads = charList.filter(c => c.alias_of == null);
+  const near = [];
+  for (let d = 1; d < chapter.segments.length && near.length < SPEAKERS_NEARBY; d++) {
+    for (const i of [idx - d, idx + d]) {
+      const name = chapter.segments[i]?.character_name;
+      const head = name && headOf(name);
+      if (head && byName.has(head) && !near.includes(head)) near.push(head);
+    }
+  }
+  const entry = h => ({ name: h.name, aliases: charList.filter(c => c.alias_of === h.id).map(c => c.name) });
+  return {
+    nearby: near.slice(0, SPEAKERS_NEARBY).map(n => entry(byName.get(n))),
+    rest: heads.filter(h => !near.includes(h.name)).map(entry),
+  };
+}
+
+function buildSpeakerRows(query) {
+  const q = query.trim().toLowerCase();
+  const { nearby, rest } = _speakerCandidates(_speakerEditIdx);
+  const row = (e, extra = {}) => ({
+    kind: 'char', value: e.name, label: e.name, color: charColors[e.name],
+    sub: q && !e.name.toLowerCase().includes(q) ? e.aliases.find(a => a.toLowerCase().includes(q)) : '',
+    ...extra,
+  });
+  const rows = [];
+  if (!q) {
+    rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
+    if (nearby.length) rows.push({ kind: 'heading', label: 'Speaking nearby' }, ...nearby.map(e => row(e)));
+    if (rest.length) rows.push({ kind: 'heading', label: nearby.length ? 'Everyone else' : 'Characters' }, ...rest.map(e => row(e)));
+    rows.push({ kind: 'new', value: '__new__', label: '+ New character…' });
+    return rows;
+  }
+  const matches = [...nearby, ...rest].filter(e =>
+    e.name.toLowerCase().includes(q) || e.aliases.some(a => a.toLowerCase().includes(q)));
+  matches.sort((a, b) => (b.name.toLowerCase().startsWith(q)) - (a.name.toLowerCase().startsWith(q)));   // stable: names starting with it first
+  if ('narrator'.startsWith(q)) rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
+  rows.push(...matches.map(e => row(e)));
+  const known = [...nearby, ...rest].some(e => [e.name, ...e.aliases].some(n => n.toLowerCase() === q));
+  if (!known && q !== 'narrator') rows.push({ kind: 'new', value: '__new__', label: `+ Add “${query.trim()}” as a new character`, newName: query.trim() });
+  return rows;
+}
+
+function showSpeakerList() {
+  const input = document.getElementById('speaker-input');
+  _speakerRows = buildSpeakerRows(_speakerTyped ? input.value : '');
+  const selectable = _speakerRows.filter(r => r.kind !== 'heading');
+  const current = selectable.findIndex(r => r.kind !== 'new' && r.value === _speakerChoice);
+  _speakerActive = _speakerRows.indexOf(selectable[_speakerTyped ? 0 : Math.max(current, 0)]);
+  const list = document.getElementById('speaker-list');
+  list.innerHTML = selectable.length ? _speakerRows.map((r, i) => {
+    if (r.kind === 'heading') return `<li class="heading" role="presentation">${esc(r.label)}</li>`;
+    const dot = r.color ? `<span class="dot" style="background:${esc(r.color)}"></span>` : '';
+    const sub = r.sub ? `<span class="sub">(${esc(r.sub)})</span>` : '';
+    return `<li role="option" data-i="${i}" class="${r.kind === 'new' ? 'new-row' : ''}${i === _speakerActive ? ' active' : ''}">${dot}${esc(r.label)}${sub}</li>`;
+  }).join('') : '<li class="empty">No match</li>';
+  list.classList.remove('hidden');
+  input.setAttribute('aria-expanded', 'true');
+  list.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+function hideSpeakerList() {
+  document.getElementById('speaker-list').classList.add('hidden');
+  document.getElementById('speaker-input').setAttribute('aria-expanded', 'false');
+}
+
+function chooseSpeakerRow(row) {
+  const input = document.getElementById('speaker-input');
+  _speakerChoice = row.value;
+  _speakerTyped = false;
+  input.value = row.kind === 'new' ? 'New character…' : row.label;
+  hideSpeakerList();
+  const nameBox = document.getElementById('speaker-new-name');
+  if (row.kind === 'new' && row.newName) nameBox.value = row.newName;
+  onSpeakerSelectChange();
+  if (row.kind === 'new') nameBox.focus();
+}
+
+function moveSpeakerActive(step) {
+  const at = _speakerRows.map((r, i) => r.kind === 'heading' ? -1 : i).filter(i => i >= 0);
+  if (!at.length) return;
+  const next = at[(Math.max(at.indexOf(_speakerActive), 0) + step + at.length) % at.length];
+  _speakerActive = next;
+  document.querySelectorAll('#speaker-list li').forEach(li => li.classList.toggle('active', +li.dataset.i === next));
+  document.querySelector('#speaker-list li.active')?.scrollIntoView({ block: 'nearest' });
+}
+
+(function wireSpeakerPicker() {
+  const input = document.getElementById('speaker-input');
+  const list = document.getElementById('speaker-list');
+  input.addEventListener('focus', () => { input.select(); showSpeakerList(); });
+  input.addEventListener('click', () => { if (list.classList.contains('hidden')) showSpeakerList(); });
+  input.addEventListener('input', () => { _speakerTyped = true; showSpeakerList(); });
+  input.addEventListener('keydown', e => {
+    const open = !list.classList.contains('hidden');
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!open) showSpeakerList(); else moveSpeakerActive(e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (open && _speakerRows[_speakerActive]) chooseSpeakerRow(_speakerRows[_speakerActive]);
+    } else if (e.key === 'Escape' && open) {
+      e.preventDefault();
+      hideSpeakerList();
+      input.value = _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
+      _speakerTyped = false;
+    }
+  });
+  // Pressing on a row must not take focus from the box (that would close the list before the click lands).
+  list.addEventListener('mousedown', e => {
+    e.preventDefault();
+    const li = e.target.closest('li[data-i]');
+    if (li) chooseSpeakerRow(_speakerRows[+li.dataset.i]);
+  });
+  input.addEventListener('blur', () => {
+    if (_speakerTyped) {           // typed an exact name and moved on: take it; anything else goes back to the last choice
+      const q = input.value.trim().toLowerCase();
+      const exact = buildSpeakerRows(input.value).find(r => r.kind !== 'new' && r.label.toLowerCase() === q);
+      if (exact) { chooseSpeakerRow(exact); return; }
+      input.value = _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
+      _speakerTyped = false;
+    }
+    hideSpeakerList();
+  });
+})();
+
+// Reload the open chapter so changed attribution, colours and voices take effect, leaving
+// everything else as it was: the same sentence current (and highlighted only if it was), the
+// same scroll position, and playback resumed from that sentence if it was playing.
+async function reloadChapterInPlace() {
+  const keep = currentSegIdx;
+  const wasPlaying = isPlaying;
+  const wasHighlighted = !!document.querySelector('#chapter-content .playing');
+  const scroller = document.getElementById('chapter-content');
+  const scrolls = [scroller.scrollTop, window.scrollY];
+  await openChapter(chapter.id, {
+    resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
+  });
+  scroller.scrollTop = scrolls[0];
+  window.scrollTo(0, scrolls[1]);
+  if (wasPlaying) playSegment(keep);
 }
 
 async function applySpeaker(reset) {
   const idx = _speakerEditIdx;
   if (idx < 0) return;
   const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
-  let character = document.getElementById('speaker-select').value || null;
+  let character = _speakerChoice || null;
 
   try {
     if (!reset && character === '__new__') {
@@ -1906,10 +2073,7 @@ async function applySpeaker(reset) {
 
     closeSpeakerEditor();
     showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
-    // Reload the chapter so the new attribution, colours and voices take effect.
-    await openChapter(chapter.id, {
-      resumePosition: idx, persistCurrent: false, persistOpened: false, highlightOnLoad: true,
-    });
+    await reloadChapterInPlace();
   } catch (e) {
     showToast(e.message || 'Request failed', 'err');
   }

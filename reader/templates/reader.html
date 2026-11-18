@@ -159,9 +159,15 @@
     <div class="modal-title">Who&#8217;s speaking?</div>
     <div class="modal-body">
       <div class="speaker-text" id="speaker-text"></div>
-      <label class="speaker-field">Speaker
-        <select id="speaker-select" class="select-input" onchange="onSpeakerSelectChange()"></select>
-      </label>
+      <div class="speaker-field">
+        <label for="speaker-input">Speaker</label>
+        <div class="combo">
+          <input id="speaker-input" class="text-input" type="text" autocomplete="off" spellcheck="false"
+                 role="combobox" aria-expanded="false" aria-controls="speaker-list" aria-autocomplete="list"
+                 placeholder="Type to search, or pick from the list">
+          <ul id="speaker-list" class="combo-list hidden" role="listbox"></ul>
+        </div>
+      </div>
       <div class="speaker-new hidden" id="speaker-new">
         <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name" oninput="scheduleImpactPreview()">
         <select id="speaker-new-gender" class="select-input" onchange="scheduleImpactPreview()">
