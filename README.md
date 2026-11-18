@@ -99,6 +99,31 @@ They cover speaker detection on a short demo story (`tests/demo_story.py`), spea
 corrections and adding characters through the API, the audio cache, database
 migrations, and Kokoro's helpers.
 
+## Dev server
+
+`reader/dev_server.py` runs the app against a scratch copy of your data, so you can try things
+(import a book, correct speakers, change settings) without touching the real thing:
+
+```bash
+cd reader
+.venv/bin/python dev_server.py                 # http://127.0.0.1:7862, TTS disabled
+.venv/bin/python dev_server.py --real-engine   # with the real TTS engine
+.venv/bin/python dev_server.py --refresh       # copy your real data again
+```
+
+The copy lives in `reader/.dev` (git-ignored). It is made the first time and **reused** on
+later starts, so what you change there is still there next time; it does not follow your real
+data afterwards, so use `--refresh` to catch up. The database is snapshotted safely even while
+the real server is running; the audio cache and uploads are copy-on-write clones where the
+filesystem supports it (APFS, btrfs, xfs), so they are instant and take no extra space, and plain
+copies elsewhere. Nothing done in the scratch copy can change your real files, and it checks that
+before starting: the scratch folder must not be inside your real data, no file in it may be the same
+file as a real one (a hardlink or symlink), and the app must report that every data path (database,
+settings, audio cache, uploads, exports, renders) is inside it. If any check fails it refuses to start.
+
+Under the hood this is the `AURIS_DATA_DIR` environment variable, which moves the database,
+settings, audio cache, uploads and exports under another folder with the same layout.
+
 ## Voice design caveats
 
 OmniVoice does not produce clean output for every voice-design combination. The upstream docs note that some attribute mixes are unreliable, especially without reference audio.

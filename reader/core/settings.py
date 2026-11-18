@@ -10,12 +10,14 @@ import sys
 import threading
 from pathlib import Path
 
+from core import paths
+
 # reader/ directory
 _APP_DIR   = Path(__file__).resolve().parent.parent
 # E:\Ebook-Reader\ (or equivalent on other platforms)
 _REPO_ROOT = _APP_DIR.parent
 
-SETTINGS_FILE = _APP_DIR / 'data' / 'settings.json'
+SETTINGS_FILE = paths.SETTINGS_FILE
 
 # Default model path = <repo_root>/model_backup/OmniVoice
 _DEFAULT_MODEL_PATH = str(_REPO_ROOT / 'model_backup' / 'OmniVoice')

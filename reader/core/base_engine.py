@@ -17,9 +17,11 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from core import paths
+
 log = logging.getLogger(__name__)
 
-AUDIO_CACHE_DIR = str(Path(__file__).resolve().parent.parent / "audio_cache")
+AUDIO_CACHE_DIR = str(paths.AUDIO_CACHE_DIR)
 SAMPLE_RATE = 24_000
 _SILENCE_FALLBACK_FRAMES = int(0.3 * SAMPLE_RATE)
 

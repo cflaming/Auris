@@ -22,6 +22,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+from core import paths
 from core.database import init_db, get_conn
 from core.base_engine import SAMPLE_RATE
 from core.engine_manager import EngineManager
@@ -47,7 +48,7 @@ def asset(path: str) -> str:
         version = 0
     return f'/static/{path}?v={version}'
 
-UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
+UPLOAD_DIR = str(paths.UPLOAD_DIR)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Pre-rendered chapter audio (full-chapter fMP4 for smooth mobile playback)

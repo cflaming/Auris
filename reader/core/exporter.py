@@ -25,10 +25,12 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from core import paths
+
 log = logging.getLogger(__name__)
 
 SAMPLE_RATE = 24_000
-EXPORTS_DIR = str(Path(__file__).resolve().parent.parent / 'exports')
+EXPORTS_DIR = str(paths.EXPORTS_DIR)
 os.makedirs(EXPORTS_DIR, exist_ok=True)
 
 

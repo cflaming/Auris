@@ -15,6 +15,7 @@ OmniVoice/
 reader/audio_cache/
 reader/exports/
 reader/uploads/
+reader/.dev/
 
 # ── Database & user settings (machine-specific) ───────────────────────────────
 reader/data/reader.db
