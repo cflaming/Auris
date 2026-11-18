@@ -1903,7 +1903,6 @@ document.addEventListener('keydown', e => {
       toggleGutter();
       break;
     case 'e': case 'E':
-      e.preventDefault();          // the dialog focuses its box on open; without this the 'e' would be typed into it
       openSpeakerEditor();
       break;
     case 'c': case 'C':
@@ -2277,38 +2276,41 @@ function moveSpeakerActive(step) {
   const modal = document.getElementById('speaker-modal');
   const input = document.getElementById('speaker-input');
   const list = document.getElementById('speaker-list');
-  const isTextField = el => el.matches?.('input[type="text"], textarea, select');
-
   input.addEventListener('input', () => { _speakerTyped = true; showSpeakerList(); });
 
-  // Keys anywhere in the dialog (the box is hidden, so focus is usually on the list): typing starts
-  // a search, arrows move through the list, Enter picks the highlighted name.
-  modal.addEventListener('keydown', e => {
-    // Escape does what the visible Cancel/Back button does. (The page-wide handler skips text boxes,
-    // so it is handled here; in the search box it only leaves the search.)
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      if (e.target === input) { resetSpeakerSearch(); list.focus(); }
-      else pressEscapeButton();
-      return;
-    }
+  // The list and the search box are the two things that take part in picking, and each handles its own
+  // keys (focus decides who gets a key, so no other control in the dialog needs excluding): arrows move
+  // the highlight, Enter picks it, and typing on the list starts a search.
+  function pickerKeys(e) {
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const inSearch = e.target === input;
-    if (!inSearch && isTextField(e.target)) return;                      // the new-character fields etc.
-    if (e.key.length === 1 && !inSearch && e.target.type !== 'radio' && e.target.tagName !== 'BUTTON' && e.key !== ' ') {
-      e.preventDefault();                                                 // the character goes into the box instead
-      revealSpeakerSearch(e.key);
-    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-      if (e.target.type === 'radio') return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       e.preventDefault();
       moveSpeakerActive(e.key === 'ArrowDown' ? 1 : -1);
-    } else if (e.key === 'Enter' && (inSearch || e.target === list)) {
+    } else if (e.key === 'Enter') {
       e.preventDefault();
       const row = _speakerRows[_speakerActive];
       // Enter picks the highlighted name; Enter again on the name you have picked applies it.
       if (!inSearch && _speakerPicked && row && row.kind !== 'new' && row.value === _speakerChoice) applySpeaker(false);
       else if (row) chooseSpeakerRow(row);
+    } else if (e.key === 'Escape' && inSearch) {
+      e.stopPropagation();                                 // leave the search; the dialog stays open
+      resetSpeakerSearch();
+      list.focus();
+    } else if (e.key.length === 1 && e.key !== ' ' && !inSearch) {
+      e.preventDefault();                                  // the character goes into the box instead
+      revealSpeakerSearch(e.key);
     }
+  }
+  list.addEventListener('keydown', pickerKeys);
+  input.addEventListener('keydown', pickerKeys);
+
+  // Anywhere else in the dialog, Escape does what the visible Cancel/Back button does. (The page-wide
+  // handler skips text boxes, so the dialog handles it itself.)
+  modal.addEventListener('keydown', e => {
+    if (e.key !== 'Escape') return;
+    e.stopPropagation();
+    pressEscapeButton();
   });
 
   // Pressing on a row must not take focus away from the box or list (that would end a search early).
