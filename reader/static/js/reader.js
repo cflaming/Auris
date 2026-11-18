@@ -288,7 +288,6 @@ async function openChapter(chapterId, options = {}) {
   segs.forEach((s, i) => { if (s.duration_sec) _segDurations[i] = s.duration_sec; });
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
   renderContent(segments);
-  if (!_fullChapterMode) _prewarmChapter();
 
   document.getElementById('chapter-content').scrollTop = 0;
   window.scrollTo(0, 0);
@@ -299,7 +298,7 @@ async function openChapter(chapterId, options = {}) {
     behavior: 'auto',
     save: persistOpened,
   });
-  if (!_fullChapterMode) _startBackgroundBuffer(startIdx);
+  if (!_fullChapterMode) _startBackgroundBuffer();
 }
 
 // ── Content rendering ─────────────────────────────────────────────────────────
@@ -386,59 +385,71 @@ function jumpTo(idx) {
 
 // ── Playback ──────────────────────────────────────────────────────────────────
 
-// Kick off generation for segment 0 and, critically, the first segment that
-// has no server-cached audio yet (the "frontier").  Firing the frontier at
-// chapter-open time gives it the maximum possible lead before playback
-// reaches it — without it, the chain only fires the frontier after 3–4
-// cached segments play through, which is too late for slow TTS on CPU.
-function _prewarmChapter() {
-  if (!segments.length) return;
-  fetchSegmentData(0);
-  const frontier = segments.findIndex(s => !s.has_audio);
-  if (frontier > 0) fetchSegmentData(frontier);
-}
+// While the user is reading (not playing), keep the next BUFFER_AHEAD segments after
+// the cursor generated, following the cursor as it moves. It never walks the whole
+// chapter, makes no request for segments that already have audio, and is idle
+// (no requests) when the window is full. During playback it stands aside: playback
+// preloads its own next segments, and two requests would compete for the TTS lock.
+const BUFFER_AHEAD = 10;
+const BUFFER_RETRY_MS = 5000;     // before retrying a segment whose generation failed
 
-// Sequentially generates TTS audio for every segment from fromIdx onward.
-// Waits until playback is idle before firing each request so it never
-// competes with the active playback pipeline at the server TTS lock.
-// Skips ahead to currentSegIdx+3 after each playback pause so it stays
-// ahead of the cursor when the user is reading without playing.
-async function _startBackgroundBuffer(fromIdx) {
+async function _startBackgroundBuffer() {
   const myId = ++_bufferGenId;
   const myChapterId = currentChapterId;
+  const cancelled = () => _bufferGenId !== myId || currentChapterId !== myChapterId;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const failedAt = new Map();                       // idx -> when its last attempt failed
 
-  for (let i = fromIdx; i < segments.length; i++) {
-    if (_bufferGenId !== myId || currentChapterId !== myChapterId) return;
+  const needsBuffering = i =>
+    !segments[i]?.has_audio && !_segCache.has(i) && Date.now() - (failedAt.get(i) ?? -Infinity) > BUFFER_RETRY_MS;
 
-    // Wait out any active playback before sending a new TTS request
-    while (isPlaying) {
-      await new Promise(r => setTimeout(r, 600));
-      if (_bufferGenId !== myId || currentChapterId !== myChapterId) return;
-      // Stay ahead of the cursor, not behind it
-      i = Math.max(i, currentSegIdx + 3) - 1;
+  while (!cancelled()) {
+    if (isPlaying) { await sleep(600); continue; }
+
+    const end = Math.min(segments.length, currentSegIdx + BUFFER_AHEAD + 1);
+    let next = -1;
+    for (let i = currentSegIdx; i < end && next < 0; i++) {
+      if (needsBuffering(i)) next = i;
     }
-
-    // Re-check cancellation after the wait
-    if (_bufferGenId !== myId || currentChapterId !== myChapterId) return;
-
-    // Skip segments already in the promise cache (fetched by preload or prewarm)
-    if (_segCache.has(i)) {
-      try { await _segCache.get(i); } catch (_) {}
-      await new Promise(r => setTimeout(r, 100));
-      continue;
-    }
+    if (next < 0) { await sleep(1000); continue; }   // window is full: wait for the cursor to move
 
     try {
-      await fetchSegmentData(i);
-    } catch (_) {}
-
-    // Small throttle between generations to let the event loop breathe
-    await new Promise(r => setTimeout(r, 100));
+      await fetchSegmentData(next);
+    } catch (_) {
+      failedAt.set(next, Date.now());
+    }
+    await sleep(100);                                // let the event loop breathe between generations
   }
+}
+
+// What the server's generate endpoint returns for a segment whose audio already exists,
+// built from the segment list so no request is needed.
+function _localSegmentData(idx) {
+  const seg = segments[idx];
+  if (!seg?.has_audio || !seg.cache_key || !seg.duration_sec) return null;
+  return {
+    audio_url: `/api/audio/${seg.cache_key}`, duration_sec: seg.duration_sec, text: seg.text,
+    character_name: seg.character_name, is_dialogue: seg.is_dialogue, segment_index: idx, cached: true,
+  };
+}
+
+// Record a freshly generated segment so later lookups (and the background buffer) skip the request.
+function _rememberGenerated(chapterId, idx, data) {
+  const seg = chapterId === currentChapterId ? segments[idx] : null;
+  if (!seg || !data.audio_url) return;
+  seg.has_audio = true;
+  seg.duration_sec = data.duration_sec;
+  seg.cache_key = data.audio_url.split('/').pop();
 }
 
 function fetchSegmentData(idx) {
   if (!_segCache.has(idx)) {
+    const local = _localSegmentData(idx);
+    if (local) {
+      _segCache.set(idx, Promise.resolve(local));
+      return _segCache.get(idx);
+    }
+    const chapterId = currentChapterId;
     const p = fetch('/api/tts/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -457,8 +468,9 @@ function fetchSegmentData(idx) {
         }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); }));
         retry.catch(() => _segCache.delete(idx));
         _segCache.set(idx, retry);
-        return retry;
+        return retry.then(d => { _rememberGenerated(chapterId, idx, d); return d; });
       }
+      _rememberGenerated(chapterId, idx, data);
       return data;
     });
     // Evict on failure so the next call retries rather than re-throwing the cached rejection.

@@ -160,6 +160,17 @@ def test_a_correction_invalidates_stored_audio(make_book, segments, correct, app
     assert not segments(book)[1]["has_audio"]
 
 
+def test_a_missing_audio_file_does_not_count_as_cached(make_book, segments, app_module, tmp_path):
+    book = make_book()
+    segments(book)
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tts_segments SET audio_path=?, duration_sec=1.0, engine_tag=? WHERE book_id=? AND segment_index=1",
+            (str(tmp_path / "deleted.wav"), app_module.tts.cache_tag, book.id),
+        )
+    assert not segments(book)[1]["has_audio"]          # the reader would otherwise skip regenerating it
+
+
 def test_audio_from_another_engine_does_not_count_as_cached(make_book, segments, app_module, tmp_path):
     book = make_book()
     segments(book)

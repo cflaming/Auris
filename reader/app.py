@@ -1287,7 +1287,7 @@ def get_segments(book_id, chapter_id):
         'text': r['text'],
         'character_name': r['character_name'],
         'is_dialogue': bool(r['is_dialogue']),
-        'has_audio': r['engine_tag'] == tts.cache_tag and bool(r['audio_path']),
+        'has_audio': _segment_audio_current(dict(r)),
         'duration_sec': r['duration_sec'],
         'cache_key': r['cache_key'],
     } for r in rows])
