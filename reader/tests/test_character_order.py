@@ -89,3 +89,17 @@ def test_merging_through_the_api_reorders_the_list(cast, client):
 
     client.put(f"/api/books/{book.id}/characters/{ids['Dee']}", json={"alias_of": None})          # unmerge
     assert book.names() == ["Amy", "Carol", "Dean", "Dee"]
+
+
+def test_each_character_reports_when_it_was_last_assigned_by_hand(cast, client):
+    book = cast({"Amy": 60, "Dean": 40, "Carol": 20})
+    assert all(c["last_override_at"] is None for c in book.listing())
+
+    with get_conn() as conn:
+        chapter_id = conn.execute("SELECT id FROM chapters WHERE book_id=? LIMIT 1", (book.id,)).fetchone()[0]
+        for anchor, name, when in (("a1", "Dean", "2026-01-01 10:00:00"), ("a2", "Dean", "2026-01-03 10:00:00"),
+                                   ("a3", "Amy", "2026-01-02 10:00:00"), ("a4", None, "2026-01-09 10:00:00")):
+            conn.execute("INSERT INTO segment_speakers (book_id, chapter_id, anchor, character_name, updated_at) "
+                         "VALUES (?,?,?,?,?)", (book.id, chapter_id, anchor, name, when))
+    last = {c["name"]: c["last_override_at"] for c in book.listing()}
+    assert last == {"Dean": "2026-01-03 10:00:00", "Amy": "2026-01-02 10:00:00", "Carol": None}   # newest per character; narrator overrides ignored

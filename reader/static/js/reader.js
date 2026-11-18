@@ -1886,8 +1886,8 @@ function onSpeakerSelectChange() {
 
 // ── Speaker picker ────────────────────────────────────────────────────────────
 // A text box with a list under it. Empty (or just opened) it shows everyone: the narrator,
-// then the characters speaking close to this sentence, nearest first, then the rest in Voice
-// Studio's order. A character that is merged into another is not listed on its own; its group
+// the last few characters assigned by hand, those speaking close to this sentence (nearest
+// first), then the rest in Voice Studio's order. A character that is merged into another is not listed on its own; its group
 // is (under the head's name), and typing the merged name still finds the group.
 
 let _speakerChoice = '';        // '' = narrator, '__new__', or a character name
@@ -1895,6 +1895,7 @@ let _speakerTyped = false;      // the box holds something the user typed, so th
 let _speakerRows = [];          // what the list shows
 let _speakerActive = -1;        // index in _speakerRows of the highlighted row
 const SPEAKERS_NEARBY = 5;
+const SPEAKERS_RECENT = 3;
 
 function _speakerCandidates(idx) {
   const byName = new Map(charList.map(c => [c.name, c]));
@@ -1903,24 +1904,30 @@ function _speakerCandidates(idx) {
     return c?.alias_of != null ? (charList.find(h => h.id === c.alias_of)?.name || name) : name;
   };
   const heads = charList.filter(c => c.alias_of == null);
+  // The characters most recently assigned by hand, as their group's head, newest first.
+  const recent = [];
+  charList.filter(c => c.last_override_at)
+    .sort((a, b) => b.last_override_at.localeCompare(a.last_override_at))
+    .forEach(c => { const h = headOf(c.name); if (!recent.includes(h) && recent.length < SPEAKERS_RECENT) recent.push(h); });
   const near = [];
   for (let d = 1; d < chapter.segments.length && near.length < SPEAKERS_NEARBY; d++) {
     for (const i of [idx - d, idx + d]) {
       const name = chapter.segments[i]?.character_name;
       const head = name && headOf(name);
-      if (head && byName.has(head) && !near.includes(head)) near.push(head);
+      if (head && byName.has(head) && !near.includes(head) && !recent.includes(head)) near.push(head);
     }
   }
   const entry = h => ({ name: h.name, aliases: charList.filter(c => c.alias_of === h.id).map(c => c.name) });
   return {
-    nearby: near.slice(0, SPEAKERS_NEARBY).map(n => entry(byName.get(n))),
-    rest: heads.filter(h => !near.includes(h.name)).map(entry),
+    recent: recent.map(n => entry(byName.get(n))),
+    nearby: near.map(n => entry(byName.get(n))),
+    rest: heads.filter(h => !near.includes(h.name) && !recent.includes(h.name)).map(entry),
   };
 }
 
 function buildSpeakerRows(query) {
   const q = query.trim().toLowerCase();
-  const { nearby, rest } = _speakerCandidates(_speakerEditIdx);
+  const { recent, nearby, rest } = _speakerCandidates(_speakerEditIdx);
   const row = (e, extra = {}) => ({
     kind: 'char', value: e.name, label: e.name, color: charColors[e.name],
     sub: q && !e.name.toLowerCase().includes(q) ? e.aliases.find(a => a.toLowerCase().includes(q)) : '',
@@ -1929,17 +1936,19 @@ function buildSpeakerRows(query) {
   const rows = [];
   if (!q) {
     rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
+    if (recent.length) rows.push({ kind: 'heading', label: 'Recently assigned' }, ...recent.map(e => row(e)));
     if (nearby.length) rows.push({ kind: 'heading', label: 'Speaking nearby' }, ...nearby.map(e => row(e)));
-    if (rest.length) rows.push({ kind: 'heading', label: nearby.length ? 'Everyone else' : 'Characters' }, ...rest.map(e => row(e)));
+    if (rest.length) rows.push({ kind: 'heading', label: recent.length || nearby.length ? 'Everyone else' : 'Characters' }, ...rest.map(e => row(e)));
     rows.push({ kind: 'new', value: '__new__', label: '+ New character…' });
     return rows;
   }
-  const matches = [...nearby, ...rest].filter(e =>
+  const everyone = [...recent, ...nearby, ...rest];
+  const matches = everyone.filter(e =>
     e.name.toLowerCase().includes(q) || e.aliases.some(a => a.toLowerCase().includes(q)));
   matches.sort((a, b) => (b.name.toLowerCase().startsWith(q)) - (a.name.toLowerCase().startsWith(q)));   // stable: names starting with it first
   if ('narrator'.startsWith(q)) rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
   rows.push(...matches.map(e => row(e)));
-  const known = [...nearby, ...rest].some(e => [e.name, ...e.aliases].some(n => n.toLowerCase() === q));
+  const known = everyone.some(e => [e.name, ...e.aliases].some(n => n.toLowerCase() === q));
   if (!known && q !== 'narrator') rows.push({ kind: 'new', value: '__new__', label: `+ Add “${query.trim()}” as a new character`, newName: query.trim() });
   return rows;
 }

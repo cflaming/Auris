@@ -822,7 +822,13 @@ def _ordered_characters(rows) -> list[dict]:
 def list_characters(book_id):
     with get_conn() as conn:
         rows = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
-    return jsonify(_ordered_characters(rows))
+        last = dict(conn.execute(
+            'SELECT character_name, MAX(updated_at) FROM segment_speakers '
+            'WHERE book_id=? AND character_name IS NOT NULL GROUP BY character_name', (book_id,)).fetchall())
+    chars = _ordered_characters(rows)
+    for c in chars:
+        c['last_override_at'] = last.get(c['name'])     # when a sentence was last assigned to them by hand
+    return jsonify(chars)
 
 
 _VALID_GENDERS = {'male', 'female', 'unknown'}
