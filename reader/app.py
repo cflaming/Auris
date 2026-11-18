@@ -16,7 +16,7 @@ import wave
 import xml.etree.ElementTree as ET
 
 from flask import (
-    Flask, Response, jsonify, render_template, request,
+    Flask, Response, abort, jsonify, make_response, render_template, request,
     send_file,
 )
 from werkzeug.utils import secure_filename
@@ -808,20 +808,31 @@ def _backfill_character_frequencies():
                          (_count_name_mentions(conn, r['book_id'], r['name']), r['id']))
 
 
-def _parse_new_character(book_id: int, body: dict):
-    """Validate a new character request -> (name, gender, error); error is a (response, status) or None."""
+def _reject(message: str, status: int):
+    abort(make_response(jsonify({'error': message}), status))
+
+
+def _parse_new_character(book_id: int, body: dict) -> tuple[str, str]:
+    """Validate a new character request -> (name, gender), or abort with a 4xx."""
     name = re.sub(r'\s+', ' ', str(body.get('name') or '')).strip()
     gender = body.get('gender') or 'unknown'
     if not name or len(name) > 60:
-        return None, None, (jsonify({'error': 'Name is required (max 60 characters)'}), 400)
+        _reject('Name is required (max 60 characters)', 400)
     if gender not in _VALID_GENDERS:
-        return None, None, (jsonify({'error': 'gender must be male, female or unknown'}), 400)
+        _reject('gender must be male, female or unknown', 400)
     with get_conn() as conn:
         if not conn.execute('SELECT 1 FROM books WHERE id=?', (book_id,)).fetchone():
-            return None, None, (jsonify({'error': 'Book not found'}), 404)
+            _reject('Book not found', 404)
         if conn.execute('SELECT 1 FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone():
-            return None, None, (jsonify({'error': f'{name} already exists in this book'}), 409)
-    return name, gender, None
+            _reject(f'{name} already exists in this book', 409)
+    return name, gender
+
+
+def _new_character(name: str, gender: str) -> dict:
+    """The character row a new name would get (voice and colour assigned like a detected one)."""
+    profile = char_module.generate_voice_profile(name, gender)
+    return {'id': -1, 'name': name, 'gender': gender, 'frequency': 0, 'alias_of': None,
+            'instruct': profile['instruct'], 'color_hex': profile['color_hex']}
 
 
 _MAX_IMPACT_CHANGES = 400   # sentences listed individually in an impact preview
@@ -829,14 +840,17 @@ _MAX_IMPACT_CHANGES = 400   # sentences listed individually in an impact preview
 
 def _character_impact(book_id: int, name: str, gender: str) -> dict:
     """Who-speaks-what differences if a character called `name` were added to the book."""
-    profile = char_module.generate_voice_profile(name, gender)
-    hypothetical = {'id': -1, 'name': name, 'gender': gender, 'frequency': 0, 'alias_of': None,
-                    'instruct': profile['instruct'], 'color_hex': profile['color_hex']}
+    hypothetical = _new_character(name, gender)
     with get_conn() as conn:
         chapters = conn.execute(
             'SELECT id, title, content FROM chapters WHERE book_id=? ORDER BY order_num', (book_id,)
         ).fetchall()
         existing = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
+        # A correction naming a character that no longer exists is ignored, but goes live
+        # again if that name is added back, even in a chapter that never mentions it.
+        has_stale_correction = {r[0] for r in conn.execute(
+            'SELECT DISTINCT chapter_id FROM segment_speakers WHERE book_id=? AND character_name=?',
+            (book_id, name))}
 
     # Detection only depends on the character set through name matches, so a chapter that
     # contains none of the names affected by the new character cannot change: skip it.
@@ -845,26 +859,24 @@ def _character_impact(book_id: int, name: str, gender: str) -> dict:
 
     changes, per_chapter = [], []
     for ch in chapters:
-        if not touched or not touched.search(ch['content'] or ''):
+        if ch['id'] not in has_stale_correction and not (touched and touched.search(ch['content'] or '')):
             continue
+        start = len(changes)
         before = _compute_segments_for_chapter(book_id, ch['id'])
         after = _compute_segments_for_chapter(book_id, ch['id'], [hypothetical])
-        moved = 0
         for i, (b, a) in enumerate(zip(before, after)):
             if b['character_name'] != a['character_name']:
-                moved += 1
                 changes.append({
                     'chapter_id': ch['id'], 'chapter_title': ch['title'], 'segment_index': i,
                     'text': a['text'], 'prev': before[i - 1]['text'] if i else '',
                     'before': b['character_name'], 'after': a['character_name'],
                 })
-        if moved:
-            per_chapter.append({'chapter_id': ch['id'], 'title': ch['title'], 'changed': moved})
+        if len(changes) > start:
+            per_chapter.append({'chapter_id': ch['id'], 'title': ch['title'], 'changed': len(changes) - start})
 
     transitions = Counter((c['before'], c['after']) for c in changes)
     return {
         'name': name,
-        'gender': gender,
         'total': len(changes),
         'gained': sum(1 for c in changes if c['after'] == name),
         'transitions': [{'from': f, 'to': t, 'count': n} for (f, t), n in transitions.most_common()],
@@ -877,25 +889,21 @@ def _character_impact(book_id: int, name: str, gender: str) -> dict:
 @app.route('/api/books/<int:book_id>/characters/preview', methods=['POST'])
 def preview_add_character(book_id):
     """Dry run of add_character: which sentences would change speaker. Changes nothing."""
-    name, gender, error = _parse_new_character(book_id, request.get_json(force=True) or {})
-    if error:
-        return error
+    name, gender = _parse_new_character(book_id, request.get_json(force=True) or {})
     return jsonify(_character_impact(book_id, name, gender))
 
 
 @app.route('/api/books/<int:book_id>/characters', methods=['POST'])
 def add_character(book_id):
     """Add a character the detector missed. Its voice is assigned like a detected one."""
-    name, gender, error = _parse_new_character(book_id, request.get_json(force=True) or {})
-    if error:
-        return error
-    profile = char_module.generate_voice_profile(name, gender)
+    name, gender = _parse_new_character(book_id, request.get_json(force=True) or {})
+    new = _new_character(name, gender)
     with get_conn() as conn:
         conn.execute(
             'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex) '
             'VALUES (?,?,?,?,?,?)',
             (book_id, name, gender, _count_name_mentions(conn, book_id, name),
-             profile['instruct'], profile['color_hex'])
+             new['instruct'], new['color_hex'])
         )
         row = conn.execute('SELECT * FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone()
     # The new name also takes part in automatic attribution, so rebuild segments

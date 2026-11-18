@@ -450,10 +450,10 @@ def _split_quote_spans(paragraph: str) -> tuple[list[tuple[bool, str]], bool]:
     return spans, ended_open
 
 
-def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str]]:
-    """Regex over character names (plus title-less aliases such as "Militia"
-    for "Miss Militia") and the alias -> canonical name map. A character
-    merged into another (its dict has "canonical") resolves to that one."""
+def _alias_table(character_map: dict) -> dict[str, str]:
+    """Every name that refers to a character (their own plus title-less aliases such as
+    "Militia" for "Miss Militia") -> canonical name. A character merged into another
+    (its dict has "canonical") resolves to that one."""
     def canonical(name: str) -> str:
         return _canonical(name, character_map)
 
@@ -466,6 +466,12 @@ def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str
     for alias, names in candidates.items():
         if len(names) == 1 and alias not in aliases:
             aliases[alias] = next(iter(names))
+    return aliases
+
+
+def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str]]:
+    """Regex over every name in the alias table, and the table itself."""
+    aliases = _alias_table(character_map)
     if not aliases:
         return None, {}
     alternation = "|".join(re.escape(a) for a in sorted(aliases, key=len, reverse=True))
@@ -478,8 +484,7 @@ def changed_name_pattern(old_map: dict, new_map: dict) -> re.Pattern | None:
     two character maps, or None if none do. Attribution depends on a map only through
     these name matches, so text containing none of them is detected identically under
     both maps."""
-    _, old = _name_matcher(old_map)
-    _, new = _name_matcher(new_map)
+    old, new = _alias_table(old_map), _alias_table(new_map)
     changed = [k for k in old.keys() | new.keys() if old.get(k) != new.get(k)]
     if not changed:
         return None

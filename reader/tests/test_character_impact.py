@@ -3,7 +3,6 @@
 import pytest
 
 from core.database import get_conn
-from core.characters import generate_voice_profile
 from tests.demo_story import ALIAS_STORY, KNOCK_ON_STORY, PRONOUN_STORY
 from tests.helpers import by_text
 
@@ -36,31 +35,45 @@ def test_demo_story_adding_dean_takes_the_two_no_lines_from_the_narrator(make_bo
     assert result["total"] == result["gained"] == 2
     assert result["transitions"] == [{"from": None, "to": "Dean", "count": 2}]
     assert [(c["title"], c["changed"]) for c in result["chapters"]] == [("Chapter 1", 2)]
-    assert [(c["text"], c["before"], c["after"]) for c in result["changes"]] == [
-        ('"No."', None, "Dean"), ('"No. We stay put."', None, "Dean")]
+    assert [(c["text"], c["prev"], c["before"], c["after"]) for c in result["changes"]] == [
+        ('"No."', "Dean walked in carrying a lantern.", None, "Dean"),
+        ('"No. We stay put."', "He set it down.", None, "Dean")]
 
 
-def test_each_change_carries_the_sentence_before_it(make_book, preview):
-    change = preview(make_book(NO_DEAN)).json["changes"][0]
-    assert change["prev"] == "Dean walked in carrying a lantern."
-
-
-@pytest.mark.parametrize("gender", ["male", "female", "unknown"])
-@pytest.mark.parametrize("characters, chapters", [
-    pytest.param(NO_DEAN, None, id="demo-story"),
-    pytest.param(THREE, (KNOCK_ON_STORY,), id="knock-on-story"),
-    pytest.param(THREE, (PRONOUN_STORY,), id="pronoun-story"),       # "he said": gender matters
+@pytest.mark.parametrize("name, gender, characters, chapters", [
+    *[pytest.param("Dean", g, NO_DEAN, None, id=f"demo-story-{g}") for g in ("male", "female", "unknown")],
+    *[pytest.param("Dean", g, THREE, (KNOCK_ON_STORY,), id=f"knock-on-{g}") for g in ("male", "female", "unknown")],
+    *[pytest.param("Dean", g, THREE, (PRONOUN_STORY,), id=f"pronoun-{g}") for g in ("male", "female", "unknown")],
+    pytest.param("Mr. Militia", "male", [("Miss Militia", "female"), ("Amy", "female")], (ALIAS_STORY,),
+                 id="alias-collision"),
+    pytest.param("Zed", "male", NO_DEAN, None, id="name-not-in-text"),
 ])
-def test_preview_predicts_exactly_what_adding_does(make_book, segments, preview, add, characters, chapters, gender):
-    book = make_book(characters, **({"chapters": chapters} if chapters else {}))
+def test_preview_predicts_exactly_what_adding_does(make_book, segments, preview, add, name, gender,
+                                                   characters, chapters):
+    book = make_book(characters, chapters=chapters)
     before = speakers(book, segments)
     predicted = {(c["chapter_id"], c["segment_index"]): (c["before"], c["after"])
-                 for c in preview(book, gender=gender).json["changes"]}
+                 for c in preview(book, name=name, gender=gender).json["changes"]}
 
-    assert add(book, gender=gender).status_code == 201
+    assert add(book, name=name, gender=gender).status_code == 201
     after = speakers(book, segments)
     actual = {key: (before[key], after[key]) for key in before if before[key] != after[key]}
     assert predicted == actual
+
+
+def test_a_stale_correction_naming_the_new_character_goes_live_even_in_a_chapter_without_the_name(
+        make_book, segments, preview, add):
+    book = make_book(NO_DEAN)                                  # chapter two never mentions Dean
+    target = by_text(segments(book, 1), '"Ready,"')            # detected as Amy
+    with get_conn() as conn:                                   # a correction left over from a deleted Dean
+        conn.execute("INSERT INTO segment_speakers (book_id, chapter_id, anchor, character_name) VALUES (?,?,?,?)",
+                     (book.id, book.chapters[1], target["anchor"], "Dean"))
+
+    predicted = [(c["chapter_id"], c["text"], c["before"], c["after"]) for c in preview(book).json["changes"]]
+    assert (book.chapters[1], '"Ready,"', "Amy", "Dean") in predicted
+
+    add(book)
+    assert by_text(segments(book, 1), '"Ready,"')["character_name"] == "Dean"
 
 
 def test_the_chosen_gender_changes_the_prediction(make_book, preview):
@@ -119,46 +132,16 @@ def test_long_lists_are_truncated_but_totals_stay_exact(make_book, preview, app_
     assert result["total"] == 2 and result["transitions"] == [{"from": None, "to": "Dean", "count": 2}]
 
 
-def test_preview_validates_like_adding(make_book, preview, add):
+def test_preview_validates_like_adding(make_book, preview, add, client):
     book = make_book(NO_DEAN)
     for call in (preview, add):
         assert call(book, name="  ").status_code == 400
         assert call(book, name="Zed", gender="robot").status_code == 400
         assert call(book, name="Amy").status_code == 409
-    assert preview(type("B", (), {"id": 999})()).status_code == 404
+    assert client.post("/api/books/999/characters/preview", json={"name": "Zed"}).status_code == 404
 
 
 # ── The shortcut: chapters that cannot be affected are not enriched at all ────
-
-def brute_force_changes(app_module, book, name, gender):
-    """Every changed sentence found by enriching *all* chapters twice, with no shortcut."""
-    profile = generate_voice_profile(name, gender)
-    hypothetical = {"id": -1, "name": name, "gender": gender, "frequency": 0, "alias_of": None,
-                    "instruct": profile["instruct"], "color_hex": profile["color_hex"]}
-    changes = set()
-    for ch in book.chapters:
-        before = app_module._compute_segments_for_chapter(book.id, ch)
-        after = app_module._compute_segments_for_chapter(book.id, ch, [hypothetical])
-        changes |= {(ch, i, b["character_name"], a["character_name"])
-                    for i, (b, a) in enumerate(zip(before, after)) if b["character_name"] != a["character_name"]}
-    return changes
-
-
-@pytest.mark.parametrize("name, gender, characters, chapters", [
-    pytest.param("Dean", "male", NO_DEAN, None, id="demo-story"),
-    pytest.param("Dean", "male", THREE, (KNOCK_ON_STORY,), id="knock-on"),
-    pytest.param("Dean", "female", THREE, (PRONOUN_STORY,), id="pronoun"),
-    pytest.param("Mr. Militia", "male", [("Miss Militia", "female"), ("Amy", "female")], (ALIAS_STORY,),
-                 id="alias-collision"),
-    pytest.param("Zed", "male", NO_DEAN, None, id="name-not-in-text"),
-])
-def test_the_shortcut_finds_exactly_what_a_full_run_finds(make_book, preview, app_module, name, gender,
-                                                          characters, chapters):
-    book = make_book(characters, **({"chapters": chapters} if chapters else {}))
-    shortcut = {(c["chapter_id"], c["segment_index"], c["before"], c["after"])
-                for c in preview(book, name=name, gender=gender).json["changes"]}
-    assert shortcut == brute_force_changes(app_module, book, name, gender)
-
 
 def test_an_alias_collision_changes_a_chapter_that_never_names_the_new_character(make_book, preview):
     book = make_book([("Miss Militia", "female"), ("Amy", "female")], chapters=(ALIAS_STORY,))

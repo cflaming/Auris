@@ -1740,12 +1740,10 @@ function closeSpeakerEditor() {
 
 let _impactTimer = null;
 let _impactToken = 0;       // discards responses that arrive after the form changed
-let _lastImpact = null;
 
 function resetImpactPreview() {
   clearTimeout(_impactTimer);
   _impactToken++;
-  _lastImpact = null;
   const box = document.getElementById('speaker-impact');
   box.classList.add('hidden');
   box.innerHTML = '';
@@ -1778,9 +1776,8 @@ async function loadImpactPreview() {
     });
     const data = await r.json();
     if (token !== _impactToken) return;
-    if (!r.ok) { _lastImpact = null; box.innerHTML = `<span class="impact-muted">${esc(data.error || 'Preview failed')}</span>`; return; }
-    _lastImpact = data;
-    box.innerHTML = renderImpact(data);
+    box.innerHTML = r.ok ? renderImpact(data)
+      : `<span class="impact-muted">${esc(data.error || 'Preview failed')}</span>`;
   } catch (e) {
     if (token === _impactToken) box.innerHTML = '<span class="impact-muted">Could not load a preview.</span>';
   }
@@ -1790,8 +1787,7 @@ function renderImpact(d) {
   const who = n => n || 'Narrator';
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (!d.total) {
-    return `<div class="impact-head">Adding <b>${esc(d.name)}</b> would not change any other sentence.</div>
-            <span class="impact-muted">It only speaks the sentences you assign to it.</span>`;
+    return `<div class="impact-head">Adding <b>${esc(d.name)}</b> would not change any other sentence.</div>`;
   }
   const toNew = d.transitions.filter(t => t.to === d.name);
   const others = d.transitions.filter(t => t.to !== d.name);
@@ -1838,7 +1834,6 @@ async function applySpeaker(reset) {
   if (idx < 0) return;
   const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
   let character = document.getElementById('speaker-select').value || null;
-  let reassigned = 0;                       // sentences re-detected by adding a character
 
   try {
     if (!reset && character === '__new__') {
@@ -1852,9 +1847,6 @@ async function applySpeaker(reset) {
       const data = await r.json();
       if (!r.ok) { showToast(data.error || 'Could not add character', 'err'); return; }
       character = data.name;
-      if (_lastImpact && _lastImpact.name === data.name && _lastImpact.total) {
-        reassigned = _lastImpact.total;
-      }
     }
 
     const anchors = _speakerScopeIndices(idx, scope).map(i => segments[i].anchor).filter(Boolean);
@@ -1867,8 +1859,7 @@ async function applySpeaker(reset) {
     if (!r.ok) { showToast(data.error || 'Could not update speaker', 'err'); return; }
 
     closeSpeakerEditor();
-    showToast(reset ? 'Speaker reset'
-      : `Speaker updated (${data.updated})` + (reassigned ? ` · ${reassigned} other sentences re-detected` : ''));
+    showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
     // Reload the chapter so the new attribution, colours and voices take effect.
     await openChapter(currentChapterId, {
       resumePosition: idx, persistCurrent: false, persistOpened: false, highlightOnLoad: true,

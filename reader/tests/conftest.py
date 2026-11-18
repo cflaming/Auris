@@ -53,7 +53,8 @@ def make_book(app_module):
     """Insert a book with chapters and characters straight into the database."""
     from core.database import get_conn
 
-    def _make(characters=CHARACTERS, chapters=(CHAPTER_ONE, CHAPTER_TWO)):
+    def _make(characters=CHARACTERS, chapters=None):
+        chapters = chapters or (CHAPTER_ONE, CHAPTER_TWO)
         with get_conn() as conn:
             book_id = conn.execute(
                 "INSERT INTO books (title, file_path, file_type) VALUES ('Demo', 'demo.txt', 'txt')"
