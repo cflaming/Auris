@@ -33,6 +33,16 @@ logging.basicConfig(level=logging.INFO,
 log = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+
+@app.template_global()
+def asset(path: str) -> str:
+    """URL for a static file, versioned by mtime so browsers never serve a stale copy."""
+    try:
+        version = int(os.path.getmtime(os.path.join(app.static_folder, path)))
+    except OSError:
+        version = 0
+    return f'/static/{path}?v={version}'
 app.config['MAX_CONTENT_LENGTH'] = 500 * 1024 * 1024  # 500 MB
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
@@ -66,12 +76,13 @@ def _chapter_render_m4a(book_id: int, chapter_id: int) -> str:
     return _chapter_render_path(book_id, chapter_id, 'm4a')
 
 
-def _clear_chapter_renders(book_id: int | None = None):
-    """Delete cached chapter renders for one book, or for all books if book_id is None."""
+def _clear_chapter_renders(book_id: int | None = None, chapter_id: int | None = None):
+    """Delete cached chapter renders for a chapter, a book, or (book_id=None) everything."""
     import glob
-    prefix = 'b*' if book_id is None else f'b{book_id}'
+    book = '*' if book_id is None else book_id
+    chapter = '*' if chapter_id is None else chapter_id
     for ext in ('fmp4', 'm4a', 'json'):
-        for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'{prefix}_c*.{ext}')):
+        for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book}_c{chapter}_*.{ext}')):
             try: os.remove(p)
             except OSError: pass
 
@@ -292,6 +303,12 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
             'SELECT narrator_instruct, single_narrator_mode, expression_tags FROM books WHERE id=?',
             (book_id,)
         ).fetchone()
+        overrides = {
+            r['anchor']: r['character_name'] for r in conn.execute(
+                'SELECT anchor, character_name FROM segment_speakers WHERE book_id=? AND chapter_id=?',
+                (book_id, chapter_id)
+            )
+        }
 
     if not ch:
         return []
@@ -305,6 +322,7 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
         single_narrator_mode=_book_single_narrator_mode(book_d),
         chapter_title=ch['title'],
         expression_tags=_book_expression_tags(book_d),
+        speaker_overrides=overrides,
     )
     return segs
 
@@ -768,6 +786,37 @@ def list_characters(book_id):
     return jsonify([dict(r) for r in rows])
 
 
+_VALID_GENDERS = {'male', 'female', 'unknown'}
+
+
+@app.route('/api/books/<int:book_id>/characters', methods=['POST'])
+def add_character(book_id):
+    """Add a character the detector missed. Its voice is assigned like a detected one."""
+    body = request.get_json(force=True) or {}
+    name = re.sub(r'\s+', ' ', str(body.get('name') or '')).strip()
+    gender = body.get('gender') or 'unknown'
+    if not name or len(name) > 60:
+        return jsonify({'error': 'Name is required (max 60 characters)'}), 400
+    if gender not in _VALID_GENDERS:
+        return jsonify({'error': 'gender must be male, female or unknown'}), 400
+    profile = char_module.generate_voice_profile(name, gender)
+    with get_conn() as conn:
+        if not conn.execute('SELECT 1 FROM books WHERE id=?', (book_id,)).fetchone():
+            return jsonify({'error': 'Book not found'}), 404
+        if conn.execute('SELECT 1 FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone():
+            return jsonify({'error': f'{name} already exists in this book'}), 409
+        conn.execute(
+            'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex) '
+            'VALUES (?,?,?,?,?,?)',
+            (book_id, name, gender, 0, profile['instruct'], profile['color_hex'])
+        )
+        row = conn.execute('SELECT * FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone()
+    # The new name also takes part in automatic attribution, so rebuild segments
+    # (manual speaker corrections are stored separately and survive this).
+    _clear_book_tts_segments(book_id)
+    return jsonify(dict(row)), 201
+
+
 @app.route('/api/books/<int:book_id>/characters/<int:char_id>', methods=['PUT'])
 def update_character(book_id, char_id):
     body = request.get_json(force=True) or {}
@@ -1134,9 +1183,18 @@ def get_segments(book_id, chapter_id):
         rows = _ensure_chapter_segments(book_id, chapter_id)
     if not rows:
         return jsonify([])
+    with get_conn() as conn:
+        corrected = {
+            r['anchor'] for r in conn.execute(
+                'SELECT anchor FROM segment_speakers WHERE book_id=? AND chapter_id=?',
+                (book_id, chapter_id)
+            )
+        }
     return jsonify([{
+        'overridden': r['anchor'] in corrected,
         'segment_index': r['segment_index'],
         'paragraph': r['paragraph'],
+        'span': r['span'],
         'text': r['text'],
         'character_name': r['character_name'],
         'is_dialogue': bool(r['is_dialogue']),
@@ -1144,6 +1202,67 @@ def get_segments(book_id, chapter_id):
         'duration_sec': r['duration_sec'],
         'cache_key': r['cache_key'],
     } for r in rows])
+
+
+_SPEAKER_SCOPES = {'segment', 'quote', 'paragraph'}
+
+
+@app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/segments/<int:segment_index>/speaker',
+           methods=['PUT'])
+def set_segment_speaker(book_id, chapter_id, segment_index):
+    """Correct who speaks a sentence, optionally across its quote or paragraph.
+
+    body: {character: <name> | null (narrator), scope: segment|quote|paragraph, reset?: bool}
+    reset=true removes the corrections instead, restoring the detected speaker.
+    """
+    body = request.get_json(force=True) or {}
+    scope = body.get('scope', 'segment')
+    if scope not in _SPEAKER_SCOPES:
+        return jsonify({'error': f'scope must be one of {sorted(_SPEAKER_SCOPES)}'}), 400
+    reset = bool(body.get('reset'))
+    name = body.get('character')
+
+    with _get_chapter_build_lock(book_id, chapter_id):
+        rows = _ensure_chapter_segments(book_id, chapter_id)
+    target = next((r for r in rows if r['segment_index'] == segment_index), None)
+    if not target or not target['anchor']:
+        return jsonify({'error': 'Segment not found or not editable'}), 404
+
+    if not reset and name is not None:
+        with get_conn() as conn:
+            chars = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
+        char_map = _character_map(chars)
+        if name not in char_map:
+            return jsonify({'error': f'Unknown character: {name}'}), 400
+        name = char_map[name].get('canonical', name)
+
+    if scope == 'segment':
+        affected = [target]
+    elif scope == 'quote':
+        affected = [r for r in rows if r['paragraph'] == target['paragraph'] and r['span'] == target['span']]
+    else:  # paragraph: its spoken lines (the clicked sentence is always included)
+        affected = [r for r in rows if r['paragraph'] == target['paragraph']
+                    and (r['is_dialogue'] or r['id'] == target['id'])]
+    anchors = [r['anchor'] for r in affected if r['anchor']]
+
+    with get_conn() as conn:
+        if reset:
+            conn.executemany(
+                'DELETE FROM segment_speakers WHERE book_id=? AND chapter_id=? AND anchor=?',
+                [(book_id, chapter_id, a) for a in anchors]
+            )
+        else:
+            conn.executemany(
+                'INSERT OR REPLACE INTO segment_speakers (book_id, chapter_id, anchor, character_name) '
+                'VALUES (?,?,?,?)',
+                [(book_id, chapter_id, a, name) for a in anchors]
+            )
+    # Rebuild this chapter's segments with the correction applied. Audio for
+    # unchanged sentences comes straight back from the WAV cache.
+    with _get_chapter_build_lock(book_id, chapter_id):
+        _build_segments_for_chapter(book_id, chapter_id)
+    _clear_chapter_renders(book_id, chapter_id)
+    return jsonify({'ok': True, 'updated': len(anchors)})
 
 
 def _store_segments(book_id, chapter_id, segs):
@@ -1157,11 +1276,11 @@ def _store_segments(book_id, chapter_id, segs):
             conn.execute(
                 'INSERT INTO tts_segments '
                 '(book_id, chapter_id, segment_index, paragraph, text, enriched_text, '
-                'character_name, instruct, speed, is_dialogue, cache_key) '
-                'VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                'character_name, instruct, speed, is_dialogue, span, anchor, cache_key) '
+                'VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (book_id, chapter_id, i, s['paragraph'], s['text'], s['enriched_text'],
                  s['character_name'], s['instruct'], s['speed'],
-                 int(s['is_dialogue']), cache_key)
+                 int(s['is_dialogue']), s['span'], s['anchor'], cache_key)
             )
         conn.execute(
             'UPDATE chapters SET enrichment_version=? WHERE id=? AND book_id=?',

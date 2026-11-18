@@ -66,6 +66,17 @@ def init_db():
             UNIQUE(book_id, name)
         );
 
+        -- Manual speaker corrections. Kept apart from tts_segments, which is rebuilt
+        -- whenever enrichment re-runs. anchor = hash of the sentence text plus its
+        -- occurrence number in the chapter; character_name NULL means the narrator.
+        CREATE TABLE IF NOT EXISTS segment_speakers (
+            book_id        INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+            chapter_id     INTEGER NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+            anchor         TEXT NOT NULL,
+            character_name TEXT,
+            PRIMARY KEY (book_id, chapter_id, anchor)
+        );
+
         CREATE TABLE IF NOT EXISTS reading_progress (
             book_id    INTEGER PRIMARY KEY REFERENCES books(id) ON DELETE CASCADE,
             chapter_id INTEGER,
@@ -134,6 +145,10 @@ def init_db():
         }
         if "generation_sec" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
+        if "span" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN span INTEGER DEFAULT 0")
+        if "anchor" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN anchor TEXT")
         if "engine_tag" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN engine_tag TEXT")
         if "paragraph" not in seg_cols:

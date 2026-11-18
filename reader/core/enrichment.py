@@ -7,11 +7,12 @@ common sentence-boundary mistakes such as "Mr." or "Dr." being treated as a
 full stop.
 """
 
+import hashlib
 import re
 
 # Bump whenever the enrichment output changes in a way that requires
 # existing stored segments to be discarded and rebuilt.
-ENRICHMENT_VERSION = 3
+ENRICHMENT_VERSION = 4
 
 _DOT = "<prd>"
 _ELLIPSIS = "<ell>"
@@ -778,6 +779,19 @@ def _segment_speed(sentence: str, is_dialogue: bool, scene_speed: float, tag: st
     return round(speed, 2)
 
 
+def _anchor(text: str, seen: dict) -> str:
+    """Stable id for a sentence: text hash + how many identical sentences came before."""
+    key = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+    n = seen[key] = seen.get(key, -1) + 1
+    return f"{key}:{n}"
+
+
+def _canonical(name: str | None, character_map: dict) -> str | None:
+    """Follow a merged character to the one whose voice it uses."""
+    entry = character_map.get(name or "")
+    return entry.get("canonical", name) if entry else name
+
+
 def enrich_chapter(
     chapter_text: str,
     character_map: dict,
@@ -785,10 +799,16 @@ def enrich_chapter(
     single_narrator_mode: bool = False,
     chapter_title: str | None = None,
     expression_tags: bool = True,
+    speaker_overrides: dict | None = None,
 ) -> list[dict]:
     """
     Return segment dicts used by playback and export.
+
+    speaker_overrides maps a sentence anchor to a character name (None = narrator),
+    replacing the detected speaker for that sentence.
     """
+    speaker_overrides = speaker_overrides or {}
+    seen_anchors: dict = {}
     cleaned_text = str(chapter_text or "").strip()
     scene_speed = _scene_speed(cleaned_text)
     paragraph_spans = []
@@ -813,6 +833,8 @@ def enrich_chapter(
                 "is_dialogue": False,
                 "is_whisper": False,
                 "paragraph": paragraph,
+                "span": 0,
+                "anchor": None,
                 "is_section_break": True,
             })
             last_tag = None
@@ -822,7 +844,10 @@ def enrich_chapter(
             parts = _segment_text(span_text)
             for part_idx, sentence in enumerate(parts):
                 is_dialogue = is_quote
+                anchor = _anchor(sentence, seen_anchors)
                 character_name = speaker if is_quote and not single_narrator_mode else None
+                if anchor in speaker_overrides and not single_narrator_mode:
+                    character_name = _canonical(speaker_overrides[anchor], character_map)
                 is_whisper = is_quote and bool(_WHISPER_RE.search(sentence) or _WHISPER_RE.search(attribution))
 
                 if character_name:
@@ -854,6 +879,8 @@ def enrich_chapter(
                         "is_dialogue": is_dialogue,
                         "is_whisper": is_whisper,
                         "paragraph": paragraph,
+                        "span": span_idx,
+                        "anchor": anchor,
                     }
                 )
 

@@ -125,9 +125,16 @@ function flushProgressSave(options = {}) {
   }
 }
 
+// The playback-bar label doubles as the "correct speaker" button.
+function updateSpeakerLabel() {
+  const seg = segments[currentSegIdx];
+  document.getElementById('pb-character').textContent = seg && seg.text ? (seg.character_name || 'Narrator') : '—';
+}
+
 function setCurrentSegment(idx, options = {}) {
   const { highlight = false, behavior = 'smooth', save = true } = options;
   currentSegIdx = clampSegmentIndex(idx);
+  updateSpeakerLabel();
   if (highlight) {
     highlightSegment(currentSegIdx, { behavior });
   }
@@ -329,8 +336,9 @@ function renderContent(segs) {
     const charAttr = name
       ? ` data-char="${esc(name)}"` + (color ? ` style="--char-color:${esc(color)}"` : '')
       : '';
-    const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '');
-    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(name || 'Narrator')}" onclick="jumpTo(${i})">${wordSpans}</span> `;
+    const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '');
+    const tip = (name || 'Narrator') + (seg.overridden ? ' (corrected)' : '');
+    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
   };
 
   const html = paras.map(p => `<p>${p.items.map(([seg, i]) => renderSeg(seg, i)).join('')}</p>`).join('');
@@ -987,7 +995,7 @@ function stopPlayback() {
   const btn = document.getElementById('btn-play');
   btn.innerHTML = '&#9654;';
   btn.classList.add('paused');
-  document.getElementById('pb-character').textContent = '—';
+  updateSpeakerLabel();
   updatePlaybackUI();
   if (!_autoAdvancing) {
     updateMediaSession(false);
@@ -1636,6 +1644,9 @@ document.addEventListener('keydown', e => {
     case 'v': case 'V':
       toggleVoices();
       break;
+    case 'e': case 'E':
+      openSpeakerEditor();
+      break;
     case 'c': case 'C':
       document.getElementById('toc-toggle').click();
       break;
@@ -1646,6 +1657,7 @@ document.addEventListener('keydown', e => {
       showShortcuts();
       break;
     case 'Escape':
+      closeSpeakerEditor();
       hideShortcuts();
       document.getElementById('export-dropdown').classList.add('hidden');
       break;
@@ -1654,6 +1666,120 @@ document.addEventListener('keydown', e => {
 
 function showShortcuts()  { document.getElementById('shortcuts-overlay').classList.remove('hidden'); }
 function hideShortcuts()  { document.getElementById('shortcuts-overlay').classList.add('hidden'); }
+
+// ── Speaker correction ────────────────────────────────────────────────────────
+
+let _speakerEditIdx = -1;
+
+// Indices of the segments a correction at `idx` would touch — mirrors the server.
+function _speakerScopeIndices(idx, scope) {
+  const seg = segments[idx];
+  if (scope === 'segment') return [idx];
+  return [...segments.keys()].filter(i => {
+    const s = segments[i];
+    if (s.paragraph !== seg.paragraph) return false;
+    return scope === 'quote' ? s.span === seg.span : (s.is_dialogue || i === idx);
+  });
+}
+
+function openSpeakerEditor(idx = currentSegIdx) {
+  // Section breaks have no text to attribute: use the nearest sentence instead.
+  if (!segments[idx]?.text) {
+    const near = segments.findIndex((s, i) => i >= idx && s.text);
+    const prev = segments.map(s => !!s.text).lastIndexOf(true, idx);
+    idx = near >= 0 ? near : prev;
+  }
+  const seg = segments[idx];
+  if (!seg || !seg.text) { showToast('Nothing to correct here', 'err'); return; }
+  _speakerEditIdx = idx;
+
+  const names = Object.keys(charColors).sort((a, b) => a.localeCompare(b));
+  const option = (value, label) =>
+    `<option value="${esc(value)}"${value === (seg.character_name || '') ? ' selected' : ''}>${esc(label)}</option>`;
+  document.getElementById('speaker-select').innerHTML =
+    option('', 'Narrator') + names.map(n => option(n, n)).join('') +
+    '<option value="__new__">+ New character…</option>';
+
+  const n = scope => _speakerScopeIndices(idx, scope).length;
+  document.getElementById('speaker-quote-n').textContent = `(${n('quote')} sentence${n('quote') === 1 ? '' : 's'})`;
+  document.getElementById('speaker-para-n').textContent  = `(${n('paragraph')} spoken)`;
+  document.querySelector('input[name="speaker-scope"][value="segment"]').checked = true;
+  document.getElementById('speaker-new-name').value = '';
+  onSpeakerSelectChange();
+  document.getElementById('speaker-modal').classList.remove('hidden');
+}
+
+// Show the whole paragraph; underline what the chosen scope will change, in the
+// chosen speaker's colour.
+function renderSpeakerPreview() {
+  const idx = _speakerEditIdx;
+  if (idx < 0) return;
+  const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
+  const picked = document.getElementById('speaker-select').value;
+  const color = picked && picked !== '__new__' ? charColors[picked] : '';
+  const affected = new Set(_speakerScopeIndices(idx, scope));
+  const para = segments[idx].paragraph;
+  const box = document.getElementById('speaker-text');
+  box.style.setProperty('--sp-color', color || 'var(--text3)');
+  box.innerHTML = segments.map((s, i) => ({ s, i })).filter(({ s }) => s.paragraph === para && s.text)
+    .map(({ s, i }) => {
+      const cls = 'sp-sent' + (affected.has(i) ? ' affected' : '') + (i === idx ? ' target' : '') +
+                  (s.overridden ? ' is-override' : '');
+      return `<span class="${cls}">${esc(s.text)}</span>`;
+    }).join(' ');
+  box.querySelector('.target')?.scrollIntoView({ block: 'nearest' });
+}
+
+function closeSpeakerEditor() {
+  document.getElementById('speaker-modal').classList.add('hidden');
+  _speakerEditIdx = -1;
+}
+
+function onSpeakerSelectChange() {
+  const isNew = document.getElementById('speaker-select').value === '__new__';
+  document.getElementById('speaker-new').classList.toggle('hidden', !isNew);
+  if (isNew) document.getElementById('speaker-new-name').focus();
+  renderSpeakerPreview();
+}
+
+async function applySpeaker(reset) {
+  const idx = _speakerEditIdx;
+  if (idx < 0) return;
+  const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
+  let character = document.getElementById('speaker-select').value || null;
+
+  try {
+    if (!reset && character === '__new__') {
+      const name = document.getElementById('speaker-new-name').value.trim();
+      if (!name) { showToast('Enter a name for the new character', 'err'); return; }
+      const r = await fetch(`/api/books/${BOOK_ID}/characters`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, gender: document.getElementById('speaker-new-gender').value }),
+      });
+      const data = await r.json();
+      if (!r.ok) { showToast(data.error || 'Could not add character', 'err'); return; }
+      character = data.name;
+    }
+
+    const r = await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/segments/${idx}/speaker`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character, scope, reset: !!reset }),
+    });
+    const data = await r.json();
+    if (!r.ok) { showToast(data.error || 'Could not update speaker', 'err'); return; }
+
+    closeSpeakerEditor();
+    showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
+    // Reload the chapter so the new attribution, colours and voices take effect.
+    await openChapter(currentChapterId, {
+      resumePosition: idx, persistCurrent: false, persistOpened: false, highlightOnLoad: true,
+    });
+  } catch (e) {
+    showToast(e.message || 'Request failed', 'err');
+  }
+}
 
 // ── Toasts ────────────────────────────────────────────────────────────────────
 

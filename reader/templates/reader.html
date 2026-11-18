@@ -69,7 +69,7 @@
     <button id="btn-next-ch"  class="pb-btn" title="Next chapter">&#10095;&#10095;</button>
   </div>
   <div class="playback-center">
-    <span id="pb-character" class="pb-character">&#8212;</span>
+    <span id="pb-character" class="pb-character" title="Who's speaking? Click to correct (E)" onclick="openSpeakerEditor()">&#8212;</span>
     <div class="pb-seek-bar" id="pb-seek-bar" title="Seek">
       <div class="pb-seek-fill" id="pb-seek-fill"></div>
     </div>
@@ -139,6 +139,7 @@
     <div class="shortcut-row"><span class="shortcut-key">&#8594;</span><span class="shortcut-desc">Next segment</span></div>
     <div class="shortcut-row"><span class="shortcut-key">B</span><span class="shortcut-desc">Add bookmark</span></div>
     <div class="shortcut-row"><span class="shortcut-key">T</span><span class="shortcut-desc">Cycle theme</span></div>
+    <div class="shortcut-row"><span class="shortcut-key">E</span><span class="shortcut-desc">Correct speaker (or right-click a sentence)</span></div>
     <div class="shortcut-row"><span class="shortcut-key">V</span><span class="shortcut-desc">Show voices</span></div>
     <div class="shortcut-row"><span class="shortcut-key">C</span><span class="shortcut-desc">Toggle contents</span></div>
     <div class="shortcut-row"><span class="shortcut-key">M</span><span class="shortcut-desc">Toggle bookmarks</span></div>
@@ -151,6 +152,37 @@
 </div>
 
 <!-- Toast container -->
+<div class="modal-overlay hidden" id="speaker-modal" onclick="if (event.target === this) closeSpeakerEditor()">
+  <div class="modal speaker-modal">
+    <div class="modal-title">Who&#8217;s speaking?</div>
+    <div class="modal-body">
+      <div class="speaker-text" id="speaker-text"></div>
+      <label class="speaker-field">Speaker
+        <select id="speaker-select" class="select-input" onchange="onSpeakerSelectChange()"></select>
+      </label>
+      <div class="speaker-new hidden" id="speaker-new">
+        <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name">
+        <select id="speaker-new-gender" class="select-input">
+          <option value="unknown">Gender: unknown</option>
+          <option value="female">Female</option>
+          <option value="male">Male</option>
+        </select>
+      </div>
+      <fieldset class="speaker-scope">
+        <legend>Apply to</legend>
+        <label><input type="radio" name="speaker-scope" value="segment" checked onchange="renderSpeakerPreview()"> This sentence</label>
+        <label><input type="radio" name="speaker-scope" value="quote" onchange="renderSpeakerPreview()"> This quote <span id="speaker-quote-n"></span></label>
+        <label><input type="radio" name="speaker-scope" value="paragraph" onchange="renderSpeakerPreview()"> Whole paragraph <span id="speaker-para-n"></span></label>
+      </fieldset>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost btn-sm" onclick="applySpeaker(true)" title="Restore the automatically detected speaker">Reset</button>
+      <button class="btn btn-ghost btn-sm" onclick="closeSpeakerEditor()">Cancel</button>
+      <button class="btn btn-sm" onclick="applySpeaker(false)">Apply</button>
+    </div>
+  </div>
+</div>
+
 <div class="toast-container" id="toast-container"></div>
 
 <audio id="tts-audio" style="display:none"></audio>
@@ -158,5 +190,5 @@
 {% block scripts %}
 <script>window.BOOK_ID = {{ book.id }};</script>
 <script>window.SINGLE_NARRATOR_MODE = {{ 1 if book.single_narrator_mode else 0 }};</script>
-<script src="/static/js/reader.js"></script>
+<script src="{{ asset('js/reader.js') }}"></script>
 {% endblock %}
