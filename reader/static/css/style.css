@@ -555,12 +555,13 @@ body.theme-paper .sentence.overridden {
   .gutter-toggle { display: inline-flex; }
   .chapter-content.show-gutter { max-width: 1100px; padding-left: 234px; padding-right: 234px; }
   .chapter-content.show-gutter .sentence.speaker-start::before {
-    content: attr(data-char);
+    content: attr(data-gutter);
     position: absolute; right: 100%; margin-right: 18px; width: 150px;
     text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     font-variant: small-caps; letter-spacing: .05em;
     color: var(--char-color, var(--text2));
   }
+  .chapter-content.show-gutter .sentence.gutter-merged::before { content: none; }
   body.theme-sepia .chapter-content.show-gutter .sentence.speaker-start::before,
   body.theme-paper .chapter-content.show-gutter .sentence.speaker-start::before {
     color: color-mix(in srgb, var(--char-color, var(--text2)) 60%, black);

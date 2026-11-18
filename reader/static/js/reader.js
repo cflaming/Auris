@@ -369,7 +369,8 @@ function renderContent(segs) {
     const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '')
               + (startsRun ? ' speaker-start' : '');
     const tip = (name || 'Narrator') + (seg.overridden ? ' (corrected)' : '');
-    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i}, event)" ondblclick="playFrom(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
+    const gutterAttr = startsRun ? ` data-gutter="${esc(name)}"` : '';
+    return `<span class="${cls}" data-idx="${i}"${charAttr}${gutterAttr} title="${esc(tip)}" onclick="jumpTo(${i}, event)" ondblclick="playFrom(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
   };
 
   // The margin names a speaker where their lines begin in a paragraph, not on every sentence.
@@ -387,6 +388,7 @@ function renderContent(segs) {
   renderVoiceLegend(segs);
   applyShowVoices();
   applyShowGutter();
+  layoutGutterLabels();
 
   // Restore font prefs (font may be reset by innerHTML)
   container.style.fontSize   = fontSize + 'px';
@@ -414,9 +416,34 @@ function applyShowVoices() {
   document.getElementById('voices-btn').classList.toggle('active', showVoices);
 }
 
+// Two speakers can start on the same line ("POTTER!" Snape roared, "FIFTY POINTS—" "Silence,"), and
+// their margin labels would print on top of each other. Wrapping decides what shares a line, so this
+// runs after layout: the first label on a line names everyone who starts there, and the rest go quiet.
+function layoutGutterLabels() {
+  const starts = [...document.querySelectorAll('#chapter-content .sentence.speaker-start')];
+  starts.forEach(el => { el.dataset.gutter = el.dataset.char; el.classList.remove('gutter-merged'); });
+  if (!showGutter) return;
+  let lead = null, leadTop = null;
+  for (const el of starts) {
+    const top = Math.round(el.getClientRects()[0]?.top ?? -1);
+    if (lead && top === leadTop && lead.parentNode === el.parentNode) {
+      if (!lead.dataset.gutter.split(' / ').includes(el.dataset.char)) lead.dataset.gutter += ` / ${el.dataset.char}`;
+      el.classList.add('gutter-merged');
+    } else { lead = el; leadTop = top; }
+  }
+}
+let _gutterLayoutQueued = false;
+function queueGutterLayout() {
+  if (_gutterLayoutQueued) return;
+  _gutterLayoutQueued = true;
+  requestAnimationFrame(() => { _gutterLayoutQueued = false; layoutGutterLabels(); });
+}
+new ResizeObserver(queueGutterLayout).observe(document.getElementById('chapter-content'));
+
 function applyShowGutter() {
   document.getElementById('chapter-content').classList.toggle('show-gutter', showGutter);
   document.getElementById('gutter-btn').classList.toggle('active', showGutter);
+  queueGutterLayout();
 }
 
 function toggleGutter() {
