@@ -473,6 +473,19 @@ def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str
     return re.compile(rf"\b(?:{alternation})\b(?!['’]s\b)"), aliases
 
 
+def changed_name_pattern(old_map: dict, new_map: dict) -> re.Pattern | None:
+    """Pattern for every name (or title-less alias) that resolves differently under the
+    two character maps, or None if none do. Attribution depends on a map only through
+    these name matches, so text containing none of them is detected identically under
+    both maps."""
+    _, old = _name_matcher(old_map)
+    _, new = _name_matcher(new_map)
+    changed = [k for k in old.keys() | new.keys() if old.get(k) != new.get(k)]
+    if not changed:
+        return None
+    return re.compile(r"\b(?:" + "|".join(re.escape(k) for k in sorted(changed, key=len, reverse=True)) + r")\b")
+
+
 def _subjects(clause: str, names_re, aliases) -> list[tuple[int, str, str]]:
     """(position, kind, value) for names and subject pronouns in a clause.
     kind is "name" (value = canonical name), "pronoun" (value = gender) or

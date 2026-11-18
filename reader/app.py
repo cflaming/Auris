@@ -3,6 +3,7 @@ Offline Ebook Reader — Flask application.
 """
 
 import base64
+from collections import Counter
 import email.utils
 import json
 import logging
@@ -290,7 +291,9 @@ def _character_map(rows) -> dict:
     return char_map
 
 
-def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
+def _compute_segments_for_chapter(book_id: int, chapter_id: int, extra_characters=()) -> list[dict]:
+    """Segments for a chapter. extra_characters are hypothetical characters (dicts) added to
+    the book's own, used to preview what adding one would change."""
     with get_conn() as conn:
         ch = conn.execute(
             'SELECT * FROM chapters WHERE id=? AND book_id=?',
@@ -314,7 +317,7 @@ def _compute_segments_for_chapter(book_id: int, chapter_id: int) -> list[dict]:
     if not ch:
         return []
 
-    char_map = _character_map(chars)
+    char_map = _character_map([*chars, *extra_characters])
     book_d = dict(book) if book else None
     segs = enrichment.enrich_chapter(
         ch['content'],
@@ -805,22 +808,89 @@ def _backfill_character_frequencies():
                          (_count_name_mentions(conn, r['book_id'], r['name']), r['id']))
 
 
-@app.route('/api/books/<int:book_id>/characters', methods=['POST'])
-def add_character(book_id):
-    """Add a character the detector missed. Its voice is assigned like a detected one."""
-    body = request.get_json(force=True) or {}
+def _parse_new_character(book_id: int, body: dict):
+    """Validate a new character request -> (name, gender, error); error is a (response, status) or None."""
     name = re.sub(r'\s+', ' ', str(body.get('name') or '')).strip()
     gender = body.get('gender') or 'unknown'
     if not name or len(name) > 60:
-        return jsonify({'error': 'Name is required (max 60 characters)'}), 400
+        return None, None, (jsonify({'error': 'Name is required (max 60 characters)'}), 400)
     if gender not in _VALID_GENDERS:
-        return jsonify({'error': 'gender must be male, female or unknown'}), 400
-    profile = char_module.generate_voice_profile(name, gender)
+        return None, None, (jsonify({'error': 'gender must be male, female or unknown'}), 400)
     with get_conn() as conn:
         if not conn.execute('SELECT 1 FROM books WHERE id=?', (book_id,)).fetchone():
-            return jsonify({'error': 'Book not found'}), 404
+            return None, None, (jsonify({'error': 'Book not found'}), 404)
         if conn.execute('SELECT 1 FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone():
-            return jsonify({'error': f'{name} already exists in this book'}), 409
+            return None, None, (jsonify({'error': f'{name} already exists in this book'}), 409)
+    return name, gender, None
+
+
+_MAX_IMPACT_CHANGES = 400   # sentences listed individually in an impact preview
+
+
+def _character_impact(book_id: int, name: str, gender: str) -> dict:
+    """Who-speaks-what differences if a character called `name` were added to the book."""
+    profile = char_module.generate_voice_profile(name, gender)
+    hypothetical = {'id': -1, 'name': name, 'gender': gender, 'frequency': 0, 'alias_of': None,
+                    'instruct': profile['instruct'], 'color_hex': profile['color_hex']}
+    with get_conn() as conn:
+        chapters = conn.execute(
+            'SELECT id, title, content FROM chapters WHERE book_id=? ORDER BY order_num', (book_id,)
+        ).fetchall()
+        existing = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
+
+    # Detection only depends on the character set through name matches, so a chapter that
+    # contains none of the names affected by the new character cannot change: skip it.
+    touched = enrichment.changed_name_pattern(
+        _character_map(existing), _character_map([*existing, hypothetical]))
+
+    changes, per_chapter = [], []
+    for ch in chapters:
+        if not touched or not touched.search(ch['content'] or ''):
+            continue
+        before = _compute_segments_for_chapter(book_id, ch['id'])
+        after = _compute_segments_for_chapter(book_id, ch['id'], [hypothetical])
+        moved = 0
+        for i, (b, a) in enumerate(zip(before, after)):
+            if b['character_name'] != a['character_name']:
+                moved += 1
+                changes.append({
+                    'chapter_id': ch['id'], 'chapter_title': ch['title'], 'segment_index': i,
+                    'text': a['text'], 'prev': before[i - 1]['text'] if i else '',
+                    'before': b['character_name'], 'after': a['character_name'],
+                })
+        if moved:
+            per_chapter.append({'chapter_id': ch['id'], 'title': ch['title'], 'changed': moved})
+
+    transitions = Counter((c['before'], c['after']) for c in changes)
+    return {
+        'name': name,
+        'gender': gender,
+        'total': len(changes),
+        'gained': sum(1 for c in changes if c['after'] == name),
+        'transitions': [{'from': f, 'to': t, 'count': n} for (f, t), n in transitions.most_common()],
+        'chapters': per_chapter,
+        'changes': changes[:_MAX_IMPACT_CHANGES],
+        'truncated': len(changes) > _MAX_IMPACT_CHANGES,
+    }
+
+
+@app.route('/api/books/<int:book_id>/characters/preview', methods=['POST'])
+def preview_add_character(book_id):
+    """Dry run of add_character: which sentences would change speaker. Changes nothing."""
+    name, gender, error = _parse_new_character(book_id, request.get_json(force=True) or {})
+    if error:
+        return error
+    return jsonify(_character_impact(book_id, name, gender))
+
+
+@app.route('/api/books/<int:book_id>/characters', methods=['POST'])
+def add_character(book_id):
+    """Add a character the detector missed. Its voice is assigned like a detected one."""
+    name, gender, error = _parse_new_character(book_id, request.get_json(force=True) or {})
+    if error:
+        return error
+    profile = char_module.generate_voice_profile(name, gender)
+    with get_conn() as conn:
         conn.execute(
             'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex) '
             'VALUES (?,?,?,?,?,?)',

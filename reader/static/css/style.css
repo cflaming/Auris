@@ -670,7 +670,7 @@ body.theme-paper .voice-swatch[style] {
 .pb-character { cursor: pointer; }
 .pb-character::after { content: " \270E"; font-style: normal; opacity: .6; }
 .pb-character:hover { text-decoration: underline; }
-.modal.speaker-modal { max-width: 560px; width: calc(100vw - 32px); }
+.modal.speaker-modal { max-width: 560px; width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; }
 .speaker-text {
   font-family: var(--font-family); color: var(--text2); line-height: 1.7;
   border-left: 3px solid var(--border); padding-left: 10px; margin-bottom: 14px;
@@ -688,6 +688,21 @@ body.theme-paper .voice-swatch[style] {
 .speaker-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .speaker-new { display: flex; gap: 8px; margin-bottom: 10px; }
 .speaker-new .text-input { flex: 1; }
+/* What adding a new character would change, as a summary plus a diff of the sentences. */
+.speaker-impact { font-size: 0.8rem; color: var(--text2); margin-bottom: 12px; line-height: 1.5; }
+.speaker-impact .impact-head { color: var(--text); margin-bottom: 4px; }
+.speaker-impact .impact-row { margin: 2px 0; }
+.speaker-impact .impact-muted { color: var(--text3); }
+.speaker-impact details { margin-top: 6px; }
+.speaker-impact summary { cursor: pointer; color: var(--accent); }
+.diff-list { max-height: 15em; overflow: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: 4px; }
+.diff-chapter { position: sticky; top: 0; background: var(--bg3); color: var(--text2); padding: 3px 8px; font-size: 0.72rem; }
+.diff-item { padding: 5px 8px; border-top: 1px solid var(--border); }
+.diff-ctx { color: var(--text3); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.diff-text { color: var(--text); font-family: var(--font-family); }
+.diff-line { font-family: 'Courier New', monospace; font-size: 0.74rem; padding: 0 6px; border-radius: 2px; }
+.diff-line.del { background: rgba(200, 70, 70, .20); }
+.diff-line.add { background: rgba(70, 170, 100, .22); }
 .speaker-scope { border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; }
 .speaker-scope legend { font-size: 0.72rem; color: var(--text3); padding: 0 4px; }
 .speaker-scope label { display: block; padding: 2px 0; cursor: pointer; }

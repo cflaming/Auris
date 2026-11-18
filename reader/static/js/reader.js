@@ -1731,6 +1731,98 @@ function renderSpeakerPreview() {
 function closeSpeakerEditor() {
   document.getElementById('speaker-modal').classList.add('hidden');
   _speakerEditIdx = -1;
+  resetImpactPreview();
+}
+
+// ── New-character impact preview ──────────────────────────────────────────────
+// While filling in "New character…", show who-speaks-what changes it would cause
+// across the book: a transition summary plus a diff of every changed sentence.
+
+let _impactTimer = null;
+let _impactToken = 0;       // discards responses that arrive after the form changed
+let _lastImpact = null;
+
+function resetImpactPreview() {
+  clearTimeout(_impactTimer);
+  _impactToken++;
+  _lastImpact = null;
+  const box = document.getElementById('speaker-impact');
+  box.classList.add('hidden');
+  box.innerHTML = '';
+}
+
+function scheduleImpactPreview() {
+  clearTimeout(_impactTimer);
+  const name = document.getElementById('speaker-new-name').value.trim();
+  if (document.getElementById('speaker-select').value !== '__new__' || !name) {
+    resetImpactPreview();
+    return;
+  }
+  const box = document.getElementById('speaker-impact');
+  box.classList.remove('hidden');
+  box.innerHTML = '<span class="impact-muted">Checking what this would change…</span>';
+  _impactTimer = setTimeout(loadImpactPreview, 400);
+}
+
+async function loadImpactPreview() {
+  const token = ++_impactToken;
+  const box = document.getElementById('speaker-impact');
+  try {
+    const r = await fetch(`/api/books/${BOOK_ID}/characters/preview`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: document.getElementById('speaker-new-name').value.trim(),
+        gender: document.getElementById('speaker-new-gender').value,
+      }),
+    });
+    const data = await r.json();
+    if (token !== _impactToken) return;
+    if (!r.ok) { _lastImpact = null; box.innerHTML = `<span class="impact-muted">${esc(data.error || 'Preview failed')}</span>`; return; }
+    _lastImpact = data;
+    box.innerHTML = renderImpact(data);
+  } catch (e) {
+    if (token === _impactToken) box.innerHTML = '<span class="impact-muted">Could not load a preview.</span>';
+  }
+}
+
+function renderImpact(d) {
+  const who = n => n || 'Narrator';
+  const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
+  if (!d.total) {
+    return `<div class="impact-head">Adding <b>${esc(d.name)}</b> would not change any other sentence.</div>
+            <span class="impact-muted">It only speaks the sentences you assign to it.</span>`;
+  }
+  const toNew = d.transitions.filter(t => t.to === d.name);
+  const others = d.transitions.filter(t => t.to !== d.name);
+
+  let html = `<div class="impact-head">Adding <b>${esc(d.name)}</b> would change who speaks
+    <b>${plural(d.total, 'sentence')}</b> in <b>${plural(d.chapters.length, 'chapter')}</b>.</div>`;
+  if (toNew.length) {
+    html += `<div class="impact-row">→ <b>${esc(d.name)}</b> gains ${d.gained}: ` +
+      toNew.map(t => `${t.count} from ${esc(who(t.from))}`).join(', ') + '</div>';
+  }
+  if (others.length) {
+    html += `<div class="impact-row">⇄ Knock-on shifts: ` +
+      others.map(t => `${esc(who(t.from))} → ${esc(who(t.to))} <span class="impact-muted">×${t.count}</span>`).join(', ') + '</div>';
+  }
+  const shown = d.chapters.slice(0, 6).map(c => `${esc(c.title)} <span class="impact-muted">(${c.changed})</span>`);
+  const more = d.chapters.length - shown.length;
+  html += `<div class="impact-row impact-muted">Chapters: ${shown.join(', ')}${more > 0 ? `, +${more} more` : ''}</div>`;
+
+  let lastChapter = null;
+  const items = d.changes.map(c => {
+    const heading = c.chapter_id !== lastChapter ? `<div class="diff-chapter">${esc(c.chapter_title)}</div>` : '';
+    lastChapter = c.chapter_id;
+    return `${heading}<div class="diff-item">
+      ${c.prev ? `<div class="diff-ctx">${esc(c.prev)}</div>` : ''}
+      <div class="diff-text">${esc(c.text)}</div>
+      <div class="diff-line del">− ${esc(who(c.before))}</div>
+      <div class="diff-line add">+ ${esc(who(c.after))}</div></div>`;
+  }).join('');
+  html += `<details><summary>Show the changes</summary><div class="diff-list">${items}</div>
+    ${d.truncated ? `<div class="impact-muted">Showing the first ${d.changes.length} of ${d.total}.</div>` : ''}</details>`;
+  return html;
 }
 
 function onSpeakerSelectChange() {
@@ -1738,6 +1830,7 @@ function onSpeakerSelectChange() {
   document.getElementById('speaker-new').classList.toggle('hidden', !isNew);
   if (isNew) document.getElementById('speaker-new-name').focus();
   renderSpeakerPreview();
+  scheduleImpactPreview();
 }
 
 async function applySpeaker(reset) {
@@ -1745,6 +1838,7 @@ async function applySpeaker(reset) {
   if (idx < 0) return;
   const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
   let character = document.getElementById('speaker-select').value || null;
+  let reassigned = 0;                       // sentences re-detected by adding a character
 
   try {
     if (!reset && character === '__new__') {
@@ -1758,6 +1852,9 @@ async function applySpeaker(reset) {
       const data = await r.json();
       if (!r.ok) { showToast(data.error || 'Could not add character', 'err'); return; }
       character = data.name;
+      if (_lastImpact && _lastImpact.name === data.name && _lastImpact.total) {
+        reassigned = _lastImpact.total;
+      }
     }
 
     const anchors = _speakerScopeIndices(idx, scope).map(i => segments[i].anchor).filter(Boolean);
@@ -1770,7 +1867,8 @@ async function applySpeaker(reset) {
     if (!r.ok) { showToast(data.error || 'Could not update speaker', 'err'); return; }
 
     closeSpeakerEditor();
-    showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
+    showToast(reset ? 'Speaker reset'
+      : `Speaker updated (${data.updated})` + (reassigned ? ` · ${reassigned} other sentences re-detected` : ''));
     // Reload the chapter so the new attribution, colours and voices take effect.
     await openChapter(currentChapterId, {
       resumePosition: idx, persistCurrent: false, persistOpened: false, highlightOnLoad: true,

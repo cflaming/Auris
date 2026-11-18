@@ -161,13 +161,14 @@
         <select id="speaker-select" class="select-input" onchange="onSpeakerSelectChange()"></select>
       </label>
       <div class="speaker-new hidden" id="speaker-new">
-        <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name">
-        <select id="speaker-new-gender" class="select-input">
+        <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name" oninput="scheduleImpactPreview()">
+        <select id="speaker-new-gender" class="select-input" onchange="scheduleImpactPreview()">
           <option value="unknown">Gender: unknown</option>
           <option value="female">Female</option>
           <option value="male">Male</option>
         </select>
       </div>
+      <div class="speaker-impact hidden" id="speaker-impact"></div>
       <fieldset class="speaker-scope">
         <legend>Apply to</legend>
         <label><input type="radio" name="speaker-scope" value="segment" checked onchange="renderSpeakerPreview()"> This sentence</label>

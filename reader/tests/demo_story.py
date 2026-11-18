@@ -38,3 +38,37 @@ CHARACTERS = [  # (name, gender)
 # AMBIGUOUS_REPEAT: same speaker, same preceding sentence. REPEATED_NO: different speakers.
 AMBIGUOUS_REPEAT = 'Nobody spoke. "No," Dean said.\n\nNobody spoke. "No," Dean said.'
 REPEATED_NO = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
+
+# Adding "Dean" to Amy/Carol/Ben also moves a line between Narrator and Ben, not just to Dean:
+# the new name changes who spoke last, which feeds the turn-taking guesses.
+KNOCK_ON_STORY = '''"Yes." Carol said.
+
+Dean frowned.
+
+Dean nodded. "Fine."
+
+"Maybe." Amy said.
+
+Ben nodded. "Sure."
+
+"Maybe."
+
+Dean nodded. "Sure."
+
+"Right." he said.
+
+"Why?"'''
+
+# "he said" goes to the most recently mentioned male character, so a new male Dean
+# takes the line from Ben but a new female Dean does not.
+PRONOUN_STORY = '''Ben leaned on the wall.
+
+Dean arrived late.
+
+"We are late," he said.'''
+
+# "Militia" is an alias of "Miss Militia"; adding a "Mr. Militia" makes it ambiguous, so the
+# alias stops matching even though the new full name never appears in the text.
+ALIAS_STORY = '''"Hello," Militia said.
+
+Amy waved. "Hi."'''
