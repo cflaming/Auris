@@ -1060,6 +1060,17 @@ function _onAudioSeeked(e) {
 _audioA.addEventListener('seeked', _onAudioSeeked);
 _audioB.addEventListener('seeked', _onAudioSeeked);
 
+// Pause in place (the audio stays loaded, unlike stopPlayback). Setting _cursorLocked here, once, is what
+// keeps the paused sentence from being replaced by whatever you scroll to before resuming.
+function pausePlayback() {
+  isPlaying = false;
+  _cursorLocked = true;
+  _kickBuffer();
+  stopWordHighlight();
+  audio.pause();
+  updatePlaybackUI();
+}
+
 function stopPlayback() {
   if (isPlaying) _cursorLocked = true;
   isPlaying = false;
@@ -1385,7 +1396,7 @@ function initMediaSession() {
     }
   });
   navigator.mediaSession.setActionHandler('pause', () => {
-    if (isPlaying) { isPlaying = false; _cursorLocked = true; _kickBuffer(); stopWordHighlight(); audio.pause(); updatePlaybackUI(); updateMediaSession(false); }
+    if (isPlaying) { pausePlayback(); updateMediaSession(false); }
   });
   // previoustrack/nexttrack are reliably fired on iOS; seekbackward/seekforward
   // have limited iOS Safari support. Wire previous/next to ±10s time seek so
@@ -1519,12 +1530,7 @@ document.addEventListener('click', (e) => {
 
 document.getElementById('btn-play').onclick = () => {
   if (isPlaying) {
-    isPlaying = false;
-    _cursorLocked = true;
-    _kickBuffer();
-    stopWordHighlight();
-    audio.pause();
-    updatePlaybackUI();
+    pausePlayback();
     queueProgressSave(chapter.id, currentSegIdx);
   } else {
     playSegment(currentSegIdx);
