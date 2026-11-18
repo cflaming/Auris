@@ -718,7 +718,7 @@ body.theme-paper .voice-swatch[style] {
 .pb-character { cursor: pointer; }
 .pb-character::after { content: " \270E"; font-style: normal; opacity: .6; }
 .pb-character:hover { text-decoration: underline; }
-.modal.speaker-modal { max-width: 560px; width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; }
+.modal.speaker-modal { --dialog-chrome: 504px; /* height of everything in the dialog except the list (measured), plus margins */ max-width: 560px; width: calc(100vw - 32px); max-height: calc(100vh - 32px); overflow: auto; }
 .speaker-text {
   font-family: var(--font-family); color: var(--text2); line-height: 1.7;
   border-left: 3px solid var(--border); padding-left: 10px; margin-bottom: 14px;
@@ -739,11 +739,11 @@ body.theme-paper .voice-swatch[style] {
    tall as fits: the rest of the dialog is about 500px, so on a short window the list gives up height
    (down to a floor) before the dialog has to scroll. */
 .combo-list {
-  height: var(--list-h, clamp(9em, calc(100vh - 504px), 24em)); overflow: auto; margin: 0; padding: 3px 0; list-style: none;
+  height: var(--list-h, clamp(9em, calc(100vh - var(--dialog-chrome)), 24em)); overflow: auto; margin: 0; padding: 3px 0; list-style: none;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
 }
 .combo-list:focus-visible { outline: 1px solid var(--accent); }
-@media (max-width: 699px), (hover: none) { .combo-list { height: clamp(7em, calc(100vh - 504px), 14em); } }
+@media (max-width: 699px), (hover: none) { .combo-list { height: clamp(7em, calc(100vh - var(--dialog-chrome)), 14em); } }
 /* The search box takes the place of the heading row, at the same height, so showing it never moves anything. */
 .speaker-head, .speaker-field .text-input { height: 32px; box-sizing: border-box; margin: 0; }
 .speaker-head { display: flex; align-items: center; gap: 8px; }
@@ -1368,7 +1368,7 @@ body.theme-paper .voice-swatch[style] {
 /* Wide screens: the paragraph (and what the change applies to) on the left, the speaker chooser on the
    right, so neither has to be squeezed to fit a short window. */
 @media (min-width: 900px) and (hover: hover) {
-  .modal.speaker-modal { max-width: 860px; --list-h: clamp(9em, calc(100vh - 300px), 30em); }
+  .modal.speaker-modal { max-width: 860px; --dialog-chrome: 300px; --list-h: clamp(9em, calc(100vh - var(--dialog-chrome)), 30em); }
   .speaker-cols { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: 24px; align-items: start; }
   .speaker-cols .speaker-text { max-height: var(--list-h); margin-bottom: 18px; }
 }

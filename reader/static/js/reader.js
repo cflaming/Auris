@@ -369,8 +369,7 @@ function renderContent(segs) {
     const cls = 'sentence' + (seg.is_dialogue ? ' dialogue-sent' : '') + (seg.overridden ? ' overridden' : '')
               + (startsRun ? ' speaker-start' : '');
     const tip = (name || 'Narrator') + (seg.overridden ? ' (corrected)' : '');
-    const gutterAttr = startsRun ? ` data-gutter="${esc(name)}"` : '';
-    return `<span class="${cls}" data-idx="${i}"${charAttr}${gutterAttr} title="${esc(tip)}" onclick="jumpTo(${i}, event)" ondblclick="playFrom(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
+    return `<span class="${cls}" data-idx="${i}"${charAttr} title="${esc(tip)}" onclick="jumpTo(${i}, event)" ondblclick="playFrom(${i})" oncontextmenu="openSpeakerEditor(${i}); return false;">${wordSpans}</span> `;
   };
 
   // The margin names a speaker where their lines begin in a paragraph, not on every sentence.
@@ -421,16 +420,17 @@ function applyShowVoices() {
 // runs after layout: the first label on a line names everyone who starts there, and the rest go quiet.
 function layoutGutterLabels() {
   const starts = [...document.querySelectorAll('#chapter-content .sentence.speaker-start')];
-  starts.forEach(el => { el.dataset.gutter = el.dataset.char; el.classList.remove('gutter-merged'); });
-  if (!showGutter) return;
-  let lead = null, leadTop = null;
-  for (const el of starts) {
-    const top = Math.round(el.getClientRects()[0]?.top ?? -1);
-    if (lead && top === leadTop && lead.parentNode === el.parentNode) {
-      if (!lead.dataset.gutter.split(' / ').includes(el.dataset.char)) lead.dataset.gutter += ` / ${el.dataset.char}`;
+  const tops = showGutter ? starts.map(el => Math.round(el.getClientRects()[0]?.top ?? -1)) : [];   // all reads before any write
+  let lead = -1;
+  starts.forEach((el, i) => {
+    el.dataset.gutter = el.dataset.char;
+    el.classList.remove('gutter-merged');
+    if (lead >= 0 && tops[i] === tops[lead] && starts[lead].parentNode === el.parentNode) {
+      const names = starts[lead].dataset.gutter.split(' / ');
+      if (!names.includes(el.dataset.char)) starts[lead].dataset.gutter += ` / ${el.dataset.char}`;
       el.classList.add('gutter-merged');
-    } else { lead = el; leadTop = top; }
-  }
+    } else if (showGutter) lead = i;
+  });
 }
 let _gutterLayoutQueued = false;
 function queueGutterLayout() {
@@ -1199,13 +1199,16 @@ function resumeFollow({ scroll = true } = {}) {
   if (scroll) highlightSegment(currentSegIdx);
 }
 
+// The current sentence's box and the reading area's, or null if it isn't drawn.
+function _cursorRects() {
+  const el = document.querySelector(`[data-idx="${currentSegIdx}"]`);
+  return el && { r: el.getBoundingClientRect(), view: document.getElementById('chapter-content').getBoundingClientRect() };
+}
+
 // Where the current sentence is relative to what's on screen: -1 above, 1 below, 0 visible.
 function _cursorSide() {
-  const el = document.querySelector(`[data-idx="${currentSegIdx}"]`);
-  if (!el) return 0;
-  const r = el.getBoundingClientRect();
-  const view = document.getElementById('chapter-content').getBoundingClientRect();
-  return r.bottom < view.top ? -1 : r.top > view.bottom ? 1 : 0;
+  const c = _cursorRects();
+  return !c ? 0 : c.r.bottom < c.view.top ? -1 : c.r.top > c.view.bottom ? 1 : 0;
 }
 
 // The button shows while playback isn't following the page, or while paused with the current
@@ -1236,10 +1239,9 @@ function noteUserScroll() {
 // and let go: once scrolling has settled, a current sentence on the centre line (or close to it)
 // means you are done looking elsewhere.
 function _cursorNearCentre() {
-  const el = document.querySelector(`[data-idx="${currentSegIdx}"]`);
-  if (!el) return false;
-  const r = el.getBoundingClientRect();
-  const view = document.getElementById('chapter-content').getBoundingClientRect();
+  const c = _cursorRects();
+  if (!c) return false;
+  const { r, view } = c;
   const centre = view.top + view.height / 2;
   return (r.top <= centre && r.bottom >= centre) || Math.abs((r.top + r.bottom) / 2 - centre) < view.height * 0.12;
 }
@@ -1571,7 +1573,7 @@ document.getElementById('pb-seek-bar').onclick = (e) => {
 // The speed slider is a stepped index into SPEED_VALUES, not a raw number: 0.1 steps up to 2x, then
 // 0.25 steps up to 3x. Each notch is one speed, so there is nothing to snap while dragging (snapping a
 // thumb under the pointer made it jump around where the step size changes) and arrow keys just work.
-const SPEED_VALUES = [...Array(16).keys()].map(i => Math.round((0.5 + i / 10) * 10) / 10).concat([2.25, 2.5, 2.75, 3.0]);
+const SPEED_VALUES = [0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.7, 1.8, 1.9, 2.0, 2.25, 2.5, 2.75, 3.0];
 
 function snapSpeed(v) {                          // nearest available speed
   return SPEED_VALUES.reduce((best, s) => Math.abs(s - v) < Math.abs(best - v) ? s : best);
@@ -1992,7 +1994,7 @@ function renderSpeakerPreview() {
 
 function speakerDebugText(idx) {
   const seg = chapter.segments[idx];
-  const link = `${location.origin}/reader/${BOOK_ID}?chapter=${chapter.id}&segment=${idx}`;
+  const link = location.origin + readerUrl(BOOK_ID, chapter.id, idx);
   const title = document.getElementById('chapter-title')?.textContent || '';
   return [
     link,
