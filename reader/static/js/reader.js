@@ -2030,6 +2030,19 @@ async function copySpeakerDebug() {
   showToast('Copied');
 }
 
+// Tab out of the dialog (past Apply, through the browser's own bar and back in) lands on the page behind
+// it. While the dialog is open, focus that arrives anywhere else is brought back inside: to the first
+// control going forward, the last going back, so the whole tab order stays reachable.
+let _tabWentBack = false;
+document.addEventListener('keydown', e => { if (e.key === 'Tab') _tabWentBack = e.shiftKey; }, true);
+document.addEventListener('focusin', e => {
+  const modal = document.getElementById('speaker-modal');
+  if (modal.classList.contains('hidden') || modal.contains(e.target)) return;
+  const controls = [...modal.querySelectorAll('button, input, select, textarea, [tabindex="0"]')]
+    .filter(el => !el.disabled && el.offsetParent !== null && el.type !== 'hidden');
+  (_tabWentBack ? controls.at(-1) : controls[0])?.focus();
+});
+
 // Each layer of the override dialog marks its way out (Cancel, Back) with data-escape; Escape presses
 // the one that is showing.
 function pressEscapeButton() {
