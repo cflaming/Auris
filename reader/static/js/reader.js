@@ -272,6 +272,7 @@ async function openChapter(chapterId, options = {}) {
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
   const ch = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
+  if (chapterId !== currentChapterId) return;      // a newer open superseded this one: don't overwrite it
   document.getElementById('chapter-title').textContent = ch.title;
   _segDurations = {};
   initMediaSession();
@@ -291,6 +292,7 @@ async function openChapter(chapterId, options = {}) {
     fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
     fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
   ]);
+  if (chapterId !== currentChapterId) return;
   segments = segs;
   _seedAudioCache(segs);
   // Pre-populate durations from API data so resume-offset calculation is accurate
@@ -437,7 +439,7 @@ async function _startBackgroundBuffer() {
 // endpoint would return for them (see generate_segment in app.py) from the segment list.
 function _seedAudioCache(segs) {
   segs.forEach((seg, idx) => {
-    if (!seg.has_audio || !seg.audio_url || !seg.duration_sec) return;
+    if (!seg.audio_url || !seg.duration_sec) return;       // audio_url is only sent for current audio
     _segCache.set(idx, Promise.resolve({
       audio_url: seg.audio_url, duration_sec: seg.duration_sec, text: seg.text,
       character_name: seg.character_name, is_dialogue: seg.is_dialogue, segment_index: idx, cached: true,
@@ -451,9 +453,8 @@ function _forgetAudio(idx) {
 }
 
 function fetchSegmentData(idx) {
-  const cache = _segCache;                            // this chapter's cache, even if another opens meanwhile
+  const cache = _segCache, chapterId = currentChapterId;   // this chapter's (openChapter replaces _segCache)
   if (!cache.has(idx)) {
-    const chapterId = currentChapterId;
     const post = () => fetch('/api/tts/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
