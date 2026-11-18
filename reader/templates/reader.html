@@ -197,7 +197,16 @@
         <label><input type="radio" name="speaker-scope" value="paragraph" onchange="renderSpeakerPreview()"> Whole paragraph <span id="speaker-para-n"></span></label>
       </fieldset>
     </div>
-    <div class="modal-footer">
+    <div class="speaker-debug hidden" id="speaker-debug">
+      <div class="speaker-debug-note">Paste this into a bug report or a chat with a developer. It points at this exact sentence.</div>
+      <textarea id="speaker-debug-text" class="text-input" readonly rows="8" spellcheck="false" aria-label="Debug details"></textarea>
+      <div class="modal-footer">
+        <button class="btn btn-ghost btn-sm debug-link" onclick="hideSpeakerDebug()">&#8592; Back</button>
+        <button class="btn btn-sm" onclick="copySpeakerDebug()">Copy</button>
+      </div>
+    </div>
+    <div class="modal-footer" id="speaker-footer">
+      <button class="btn btn-ghost btn-sm debug-link" onclick="showSpeakerDebug()" title="Details to share when reporting a problem with this sentence">Debug info</button>
       <button class="btn btn-ghost btn-sm" onclick="applySpeaker(true)" title="Restore the automatically detected speaker">Reset</button>
       <button class="btn btn-ghost btn-sm" onclick="closeSpeakerEditor()">Cancel</button>
       <button class="btn btn-sm" onclick="applySpeaker(false)">Apply</button>

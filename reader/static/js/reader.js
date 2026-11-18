@@ -1957,7 +1957,53 @@ function renderSpeakerPreview() {
   box.querySelector('.target')?.scrollIntoView({ block: 'nearest' });
 }
 
+// ── Debug info ────────────────────────────────────────────────────────────────
+// "Debug info" swaps the dialog for a plain-text description of the sentence, with a link that
+// reopens the reader on it (the same ?chapter=&segment= link the corrections page uses). Nothing
+// touches the clipboard until Copy is pressed, and on a browser that refuses, the text is already
+// selected to copy by hand.
+
+function speakerDebugText(idx) {
+  const seg = chapter.segments[idx];
+  const link = `${location.origin}/reader/${BOOK_ID}?chapter=${chapter.id}&segment=${idx}`;
+  const title = document.getElementById('chapter-title')?.textContent || '';
+  return [
+    link,
+    `Book ${BOOK_ID}, chapter ${chapter.id}${title ? ` "${title}"` : ''}, segment ${idx} (0-based), paragraph ${seg.paragraph}`,
+    `Speaker: ${seg.character_name || '(none)'}${seg.overridden ? ' [manual override]' : ' [auto-detected]'}${seg.is_dialogue ? ', dialogue' : ', narration'}`,
+    `Text: ${seg.text}`,
+  ].join('\n');
+}
+
+function showSpeakerDebug() {
+  const box = document.getElementById('speaker-debug-text');
+  box.value = speakerDebugText(_speakerEditIdx);
+  document.getElementById('speaker-debug').classList.remove('hidden');
+  document.querySelector('.speaker-modal').classList.add('showing-debug');
+  box.focus();
+  box.select();
+}
+
+function hideSpeakerDebug() {
+  document.getElementById('speaker-debug').classList.add('hidden');
+  document.querySelector('.speaker-modal').classList.remove('showing-debug');
+  document.getElementById('speaker-list').focus();
+}
+
+async function copySpeakerDebug() {
+  const box = document.getElementById('speaker-debug-text');
+  box.focus();
+  box.select();
+  try {
+    await navigator.clipboard.writeText(box.value);
+  } catch {
+    if (!document.execCommand?.('copy')) { showToast('Could not copy: the text is selected, copy it by hand', 'err'); return; }
+  }
+  showToast('Copied');
+}
+
 function closeSpeakerEditor() {
+  hideSpeakerDebug();
   document.activeElement?.blur();       // so the reader's keyboard shortcuts work again straight away
   document.getElementById('speaker-modal').classList.add('hidden');
   _speakerEditIdx = -1;

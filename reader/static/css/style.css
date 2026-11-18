@@ -1353,3 +1353,11 @@ body.theme-paper .voice-swatch[style] {
     flex: 1 0 auto;
   }
 }
+
+/* "Debug info" sits apart from the real buttons, small and quiet: opening it only swaps the dialog's
+   contents (nothing is copied until you press Copy inside). */
+.debug-link { margin-right: auto; color: var(--text3); font-size: 0.72rem; }
+.speaker-debug-note { font-size: 0.78rem; color: var(--text3); margin-bottom: 8px; }
+.speaker-debug .text-input { width: 100%; height: auto; font-family: 'Courier New', monospace; font-size: 0.75rem; line-height: 1.45; resize: none; margin-bottom: 14px; }
+.speaker-modal.showing-debug .modal-body,
+.speaker-modal.showing-debug #speaker-footer { display: none; }
