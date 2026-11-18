@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from core.base_engine import (  # noqa: F401  (AUDIO_CACHE_DIR re-exported for app.py)
+from core.base_engine import (
     AUDIO_CACHE_DIR,
     SAMPLE_RATE,
     BaseEngine,
@@ -118,6 +118,14 @@ class TTSEngine(BaseEngine):
 
     def _unload(self):
         self.model = None
+
+    def apply_settings(self, updates: dict):
+        if 'model_path' in updates:
+            # Reset so the next load_async() picks up the new path.
+            self.model_path = updates['model_path']
+            self._ready = False
+            self._error = None
+            self.model = None
 
     def _load(self):
         with self._lock:
@@ -278,6 +286,7 @@ class TTSEngine(BaseEngine):
 
         audio = audio_arrays[0] if isinstance(audio_arrays, list) else audio_arrays
         return self._normalise_audio(audio)
+
     def _resolve_item(
         self,
         text: str,
@@ -416,10 +425,9 @@ class TTSEngine(BaseEngine):
             eff_instruct, eff_ref_audio, eff_ref_text, key, path = self._resolve_item(
                 text, instruct, ref_audio, speed, vd_cache=vd_cache
             )
-            cached = self._read_cached_wav(path)
-            if cached is not None:
-                data, sr = cached
-                results[i] = {"audio_path": path, "duration_sec": len(data) / sr,
+            cached_sec = self._cached_duration(path)
+            if cached_sec is not None:
+                results[i] = {"audio_path": path, "duration_sec": cached_sec,
                               "cache_hit": True, "cache_key": key, "generation_sec": 0.0}
                 progress_cb()
                 continue
@@ -522,3 +530,5 @@ class TTSEngine(BaseEngine):
                         "generation_sec": gen_sec,
                     }
                     progress_cb()
+
+        return results

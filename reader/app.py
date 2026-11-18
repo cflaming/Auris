@@ -21,6 +21,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from core.database import init_db, get_conn
+from core.base_engine import SAMPLE_RATE
 from core.tts_engine import TTSEngine
 from core import characters as char_module
 from core import enrichment, exporter, structure, settings as app_settings
@@ -38,7 +39,7 @@ UPLOAD_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Pre-rendered chapter audio (full-chapter fMP4 for smooth mobile playback)
-from core.tts_engine import AUDIO_CACHE_DIR as _ACD
+from core.base_engine import AUDIO_CACHE_DIR as _ACD
 _CHAPTER_RENDER_DIR = os.path.join(_ACD, 'chapter_renders')
 os.makedirs(_CHAPTER_RENDER_DIR, exist_ok=True)
 
@@ -400,7 +401,7 @@ def debug_orphans_page():
 
 def _scan_orphans() -> dict:
     import re
-    from core.tts_engine import AUDIO_CACHE_DIR
+    from core.base_engine import AUDIO_CACHE_DIR
 
     # --- known cache keys from DB ---
     with get_conn() as conn:
@@ -970,7 +971,7 @@ def tts_load():
 
 _SILENCE_CACHE_KEY   = 'a' * 32  # fixed key — all section breaks share one silence file
 _SILENCE_DURATION    = 1.5       # seconds
-_SILENCE_SAMPLE_RATE = 24_000    # match TTS engine output rate
+_SILENCE_SAMPLE_RATE = SAMPLE_RATE
 _silence_file_ready  = False     # avoids repeated stat() after first generation
 
 
@@ -1155,7 +1156,7 @@ _CACHE_KEY_RE = re.compile(r'^[0-9a-fA-F]{32}$')
 def serve_audio(cache_key):
     if not _CACHE_KEY_RE.match(cache_key):
         return '', 404
-    from core.tts_engine import AUDIO_CACHE_DIR
+    from core.base_engine import AUDIO_CACHE_DIR
     path = os.path.join(AUDIO_CACHE_DIR, f'{cache_key}.wav')
     if not os.path.exists(path):
         return '', 404
@@ -1167,7 +1168,7 @@ def serve_audio_fmp4(cache_key):
     """WAV converted to fragmented MP4 (AAC) for MediaSource Extensions streaming."""
     if not _CACHE_KEY_RE.match(cache_key):
         return '', 404
-    from core.tts_engine import AUDIO_CACHE_DIR
+    from core.base_engine import AUDIO_CACHE_DIR
     from core.exporter import _ffmpeg_available
     wav_path = os.path.join(AUDIO_CACHE_DIR, f'{cache_key}.wav')
     if not os.path.exists(wav_path):
@@ -1784,13 +1785,7 @@ def save_settings():
         tts.load_async()
         _clear_chapter_renders()
 
-    # If model path changed, reset OmniVoice so it reloads from the new path
-    # (model_path is meaningless to Kokoro).
-    if 'model_path' in updates and tts.engine_name == 'omnivoice':
-        tts.model_path = updates['model_path']
-        tts._ready = False
-        tts._error = None
-        tts.model = None
+    tts.apply_settings(updates)
 
     if 'narrator_instruct' in updates and updates['narrator_instruct'] != previous.get('narrator_instruct'):
         with get_conn() as conn:

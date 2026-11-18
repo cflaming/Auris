@@ -54,4 +54,3 @@ def format_instruct(parts: dict) -> str | None:
     items.extend(parts.get("styles", []))
     items.extend(parts.get("extras", []))
     return ", ".join(items) if items else None
-

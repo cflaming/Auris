@@ -67,6 +67,9 @@ class BaseEngine:
     def _unload(self):
         """Drop loaded model state (called with self._lock held)."""
 
+    def apply_settings(self, updates: dict):
+        """React to changed app settings. No-op by default."""
+
     # ── engine-specific hooks ────────────────────────────────────────────
     @staticmethod
     def cache_key(text, instruct, ref_audio, speed, ref_text=None) -> str:
@@ -95,18 +98,22 @@ class BaseEngine:
 
 
     @staticmethod
-    def _read_cached_wav(path: str) -> tuple[np.ndarray, int] | None:
-        """Return (audio, sr) for a valid cached WAV, or None (deleting the file) if missing/zero-length."""
-        if not os.path.exists(path):
+    def _cached_duration(path: str) -> float | None:
+        """Duration in seconds of a valid cached WAV, or None if missing.
+        Zero-length files are deleted (and None returned) so they get re-synthesized.
+        Reads only the header."""
+        try:
+            info = sf.info(path)
+        except (RuntimeError, OSError):
             return None
-        if sf.info(path).frames == 0:
+        if info.frames == 0:
             log.warning("Deleting zero-length cached WAV at %s, re-synthesizing", path)
             try:
                 os.remove(path)
             except OSError:
                 pass
             return None
-        return sf.read(path)
+        return info.frames / info.samplerate
 
     def _synthesize_one(
         self, text: str, instruct: str | None, ref_audio: str | None,
@@ -124,8 +131,6 @@ class BaseEngine:
             log.warning("Zero-length audio for %r — using silence fallback", text[:50])
             audio = np.zeros(_SILENCE_FALLBACK_FRAMES, dtype=np.float32)
         return audio
-
-        return results
 
     def generate(
         self,
@@ -149,12 +154,11 @@ class BaseEngine:
             text, instruct, ref_audio, speed, ref_text=ref_text
         )
 
-        cached = self._read_cached_wav(path)
-        if cached is not None:
-            data, sr = cached
+        cached_sec = self._cached_duration(path)
+        if cached_sec is not None:
             return {
                 "audio_path": path,
-                "duration_sec": len(data) / sr,
+                "duration_sec": cached_sec,
                 "cache_hit": True,
                 "cache_key": key,
                 "generation_sec": 0.0,
@@ -204,7 +208,7 @@ class BaseEngine:
             try:
                 results.append(self.generate(
                     text=item["text"], instruct=item.get("instruct"),
-                    ref_audio=item.get("ref_audio"),
+                    ref_audio=item.get("ref_audio"), ref_text=item.get("ref_text"),
                     speed=float(item.get("speed") or 1.0), num_step=num_step))
             except Exception as exc:
                 log.warning("Synthesis failed: %s", exc)
