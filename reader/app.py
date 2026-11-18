@@ -187,6 +187,7 @@ def _startup():
             return
         try:
             init_db()
+            _backfill_character_frequencies()
             _prune_stale_renders()
         except Exception:
             tts.load_async()
@@ -789,6 +790,21 @@ def list_characters(book_id):
 _VALID_GENDERS = {'male', 'female', 'unknown'}
 
 
+def _count_name_mentions(conn, book_id: int, name: str) -> int:
+    """How often a name appears in the book text (the same 'frequency' detected characters carry)."""
+    pattern = re.compile(rf'\b{re.escape(name)}\b')
+    return sum(len(pattern.findall(r['content'] or ''))
+               for r in conn.execute('SELECT content FROM chapters WHERE book_id=?', (book_id,)))
+
+
+def _backfill_character_frequencies():
+    """Characters added by hand used to be stored with frequency 0; count their mentions."""
+    with get_conn() as conn:
+        for r in conn.execute('SELECT id, book_id, name FROM characters WHERE frequency=0').fetchall():
+            conn.execute('UPDATE characters SET frequency=? WHERE id=?',
+                         (_count_name_mentions(conn, r['book_id'], r['name']), r['id']))
+
+
 @app.route('/api/books/<int:book_id>/characters', methods=['POST'])
 def add_character(book_id):
     """Add a character the detector missed. Its voice is assigned like a detected one."""
@@ -808,7 +824,8 @@ def add_character(book_id):
         conn.execute(
             'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex) '
             'VALUES (?,?,?,?,?,?)',
-            (book_id, name, gender, 0, profile['instruct'], profile['color_hex'])
+            (book_id, name, gender, _count_name_mentions(conn, book_id, name),
+             profile['instruct'], profile['color_hex'])
         )
         row = conn.execute('SELECT * FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone()
     # The new name also takes part in automatic attribution, so rebuild segments
