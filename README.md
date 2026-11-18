@@ -84,6 +84,21 @@ The model directory must contain the files OmniVoice expects, such as `config.js
 4. Adjust character voices or the narrator voice, preview them, then save.
 5. Export audio or subtitles if needed.
 
+## Tests
+
+The tests run without a browser, a TTS model or any real data (each test gets its own
+temporary database and a fake engine):
+
+```bash
+cd reader
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest
+```
+
+They cover speaker detection on a short demo story (`tests/demo_story.py`), speaker
+corrections and adding characters through the API, the audio cache, database
+migrations, and Kokoro's helpers.
+
 ## Voice design caveats
 
 OmniVoice does not produce clean output for every voice-design combination. The upstream docs note that some attribute mixes are unreliable, especially without reference audio.
