@@ -1171,15 +1171,34 @@ function updateFollowButton() {
   document.getElementById('follow-btn').classList.toggle('hidden', !isPlaying || _followPlayback);
 }
 
+// Scrolling the user did, as opposed to the page scrolling itself (re-centring on a sentence, a
+// reflow after a font change, a scroll position restored after a reload). Only the former may
+// pause following or move the reading position: a scroll event alone proves nothing, and a stray
+// one used to move the cursor from the paused sentence to whatever sat at 35% of the screen height.
+let _userScrollAt = 0;
+let _scrollbarDragging = false;
+const _userIsScrolling = () => _scrollbarDragging || Date.now() - _userScrollAt < 1500;   // momentum scrolling lingers
+
+function noteUserScroll() {
+  _userScrollAt = Date.now();
+  suspendFollow();
+}
+
 (function wireManualScroll() {
   const content = document.getElementById('chapter-content');
-  content.addEventListener('wheel', suspendFollow, { passive: true });
-  content.addEventListener('touchmove', suspendFollow, { passive: true });
+  content.addEventListener('wheel', noteUserScroll, { passive: true });
+  content.addEventListener('touchmove', noteUserScroll, { passive: true });
+  content.addEventListener('touchend', () => { _userScrollAt = Date.now(); }, { passive: true });
   // Dragging or clicking the scrollbar: the click lands on the scroller itself, beyond its content width.
-  content.addEventListener('pointerdown', e => { if (e.target === content && e.offsetX >= content.clientWidth) suspendFollow(); });
+  content.addEventListener('pointerdown', e => {
+    if (e.target === content && e.offsetX >= content.clientWidth) { _scrollbarDragging = true; noteUserScroll(); }
+  });
+  const dragEnd = () => { if (_scrollbarDragging) { _scrollbarDragging = false; _userScrollAt = Date.now(); } };
+  document.addEventListener('pointerup', dragEnd);
+  document.addEventListener('pointercancel', dragEnd);
   document.addEventListener('keydown', e => {
     if (['PageUp', 'PageDown', 'Home', 'End', 'ArrowUp', 'ArrowDown'].includes(e.key)
-        && !/^(input|textarea|select)$/i.test(document.activeElement.tagName)) suspendFollow();
+        && !/^(input|textarea|select)$/i.test(document.activeElement.tagName)) noteUserScroll();
   });
 })();
 
@@ -1552,7 +1571,7 @@ function toggleBookmarkPanel() {
 // ── Progress persistence ──────────────────────────────────────────────────────
 
 function updateProgressFromViewport() {
-  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
+  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil || !_userIsScrolling()) return;
 
   const sentenceEls = document.querySelectorAll('.sentence');
   if (!sentenceEls.length) return;
@@ -1581,7 +1600,7 @@ function updateProgressFromViewport() {
 }
 
 function scheduleViewportProgressUpdate() {
-  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil) return;
+  if (!chapter.segments.length || isPlaying || Date.now() < _ignoreScrollTrackingUntil || !_userIsScrolling()) return;
   clearTimeout(_scrollProgressTimer);
   _scrollProgressTimer = setTimeout(updateProgressFromViewport, 120);
 }
