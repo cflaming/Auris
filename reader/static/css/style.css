@@ -530,26 +530,21 @@ code {
 
 /* Voice attribution: underline each character's lines in their colour.
    Light themes darken the (pastel) colours so they stay visible. */
-.show-voices .sentence[data-char] {
+.show-voices .sentence[data-char],
+.sentence.overridden {
   text-decoration: underline 2px var(--char-color, var(--accent));
   text-underline-offset: 5px;
   text-decoration-skip-ink: none;
 }
 body.theme-sepia .show-voices .sentence[data-char],
-body.theme-paper .show-voices .sentence[data-char] {
-  text-decoration-color: color-mix(in srgb, var(--char-color, var(--accent)) 60%, black);
-}
-/* Manually corrected speaker: wavy underline, shown even with voices hidden. */
-.sentence.overridden,
-.show-voices .sentence.overridden[data-char] {
-  text-decoration: underline wavy 2px var(--char-color, var(--accent));
-  text-underline-offset: 5px;
-  text-decoration-skip-ink: none;
-}
+body.theme-paper .show-voices .sentence[data-char],
 body.theme-sepia .sentence.overridden,
 body.theme-paper .sentence.overridden {
   text-decoration-color: color-mix(in srgb, var(--char-color, var(--accent)) 60%, black);
 }
+/* Manually corrected speaker: the same underline, wavy — shown even with voices hidden. */
+.sentence.overridden,
+.show-voices .sentence.overridden[data-char] { text-decoration-style: wavy; }
 .voice-legend {
   display: flex; flex-wrap: wrap; gap: 6px 14px;
   /* Line up with the centred 760px text column of .chapter-content */
@@ -689,7 +684,6 @@ body.theme-paper .voice-swatch[style] {
   text-decoration: underline 2px var(--sp-color, var(--accent));
   text-underline-offset: 5px; text-decoration-skip-ink: none;
 }
-.speaker-text .sp-sent.affected.is-override { text-decoration-style: wavy; text-decoration-thickness: 1.5px; }
 .speaker-text .sp-sent.target { font-weight: 600; }
 .speaker-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
 .speaker-new { display: flex; gap: 8px; margin-bottom: 10px; }

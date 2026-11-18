@@ -147,6 +147,8 @@ def init_db():
             conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
         if "span" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN span INTEGER DEFAULT 0")
+        if "overridden" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN overridden INTEGER DEFAULT 0")
         if "anchor" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN anchor TEXT")
         if "engine_tag" not in seg_cols:

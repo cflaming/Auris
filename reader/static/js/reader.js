@@ -1671,7 +1671,7 @@ function hideShortcuts()  { document.getElementById('shortcuts-overlay').classLi
 
 let _speakerEditIdx = -1;
 
-// Indices of the segments a correction at `idx` would touch — mirrors the server.
+// Indices of the segments a correction at `idx` covers for the chosen scope.
 function _speakerScopeIndices(idx, scope) {
   const seg = segments[idx];
   if (scope === 'segment') return [idx];
@@ -1685,9 +1685,8 @@ function _speakerScopeIndices(idx, scope) {
 function openSpeakerEditor(idx = currentSegIdx) {
   // Section breaks have no text to attribute: use the nearest sentence instead.
   if (!segments[idx]?.text) {
-    const near = segments.findIndex((s, i) => i >= idx && s.text);
-    const prev = segments.map(s => !!s.text).lastIndexOf(true, idx);
-    idx = near >= 0 ? near : prev;
+    const after = segments.findIndex((s, i) => i >= idx && s.text);
+    idx = after >= 0 ? after : segments.slice(0, idx).findLastIndex(s => s.text);
   }
   const seg = segments[idx];
   if (!seg || !seg.text) { showToast('Nothing to correct here', 'err'); return; }
@@ -1723,8 +1722,7 @@ function renderSpeakerPreview() {
   box.style.setProperty('--sp-color', color || 'var(--text3)');
   box.innerHTML = segments.map((s, i) => ({ s, i })).filter(({ s }) => s.paragraph === para && s.text)
     .map(({ s, i }) => {
-      const cls = 'sp-sent' + (affected.has(i) ? ' affected' : '') + (i === idx ? ' target' : '') +
-                  (s.overridden ? ' is-override' : '');
+      const cls = 'sp-sent' + (affected.has(i) ? ' affected' : '') + (i === idx ? ' target' : '');
       return `<span class="${cls}">${esc(s.text)}</span>`;
     }).join(' ');
   box.querySelector('.target')?.scrollIntoView({ block: 'nearest' });
@@ -1762,10 +1760,11 @@ async function applySpeaker(reset) {
       character = data.name;
     }
 
-    const r = await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/segments/${idx}/speaker`, {
+    const anchors = _speakerScopeIndices(idx, scope).map(i => segments[i].anchor).filter(Boolean);
+    const r = await fetch(`/api/books/${BOOK_ID}/chapters/${currentChapterId}/speaker`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character, scope, reset: !!reset }),
+      body: JSON.stringify({ character, anchors, reset: !!reset }),
     });
     const data = await r.json();
     if (!r.ok) { showToast(data.error || 'Could not update speaker', 'err'); return; }

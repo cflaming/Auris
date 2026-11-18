@@ -12,7 +12,13 @@ import re
 
 # Bump whenever the enrichment output changes in a way that requires
 # existing stored segments to be discarded and rebuilt.
-ENRICHMENT_VERSION = 4
+ENRICHMENT_VERSION = 5
+
+def _canonical(name: str | None, character_map: dict) -> str | None:
+    """Follow a merged character to the one whose voice it uses."""
+    target = (character_map.get(name) or {}).get("canonical")
+    return target if target in character_map else name
+
 
 _DOT = "<prd>"
 _ELLIPSIS = "<ell>"
@@ -449,8 +455,7 @@ def _name_matcher(character_map: dict) -> tuple[re.Pattern | None, dict[str, str
     for "Miss Militia") and the alias -> canonical name map. A character
     merged into another (its dict has "canonical") resolves to that one."""
     def canonical(name: str) -> str:
-        target = (character_map.get(name) or {}).get("canonical")
-        return target if target in character_map else name
+        return _canonical(name, character_map)
 
     aliases = {name: canonical(name) for name in character_map}
     candidates: dict[str, set[str]] = {}
@@ -779,17 +784,12 @@ def _segment_speed(sentence: str, is_dialogue: bool, scene_speed: float, tag: st
     return round(speed, 2)
 
 
-def _anchor(text: str, seen: dict) -> str:
-    """Stable id for a sentence: text hash + how many identical sentences came before."""
-    key = hashlib.sha1(text.encode("utf-8")).hexdigest()[:12]
+def _anchor(prev: str, text: str, seen: dict) -> str:
+    """Stable id for a sentence: hash of it and the sentence before it (so repeated
+    lines like "No." stay distinct), plus how many identical pairs came earlier."""
+    key = hashlib.sha1(f"{prev}\n{text}".encode("utf-8")).hexdigest()[:12]
     n = seen[key] = seen.get(key, -1) + 1
     return f"{key}:{n}"
-
-
-def _canonical(name: str | None, character_map: dict) -> str | None:
-    """Follow a merged character to the one whose voice it uses."""
-    entry = character_map.get(name or "")
-    return entry.get("canonical", name) if entry else name
 
 
 def enrich_chapter(
@@ -809,6 +809,7 @@ def enrich_chapter(
     """
     speaker_overrides = speaker_overrides or {}
     seen_anchors: dict = {}
+    prev_sentence = ""
     cleaned_text = str(chapter_text or "").strip()
     scene_speed = _scene_speed(cleaned_text)
     paragraph_spans = []
@@ -835,6 +836,7 @@ def enrich_chapter(
                 "paragraph": paragraph,
                 "span": 0,
                 "anchor": None,
+                "overridden": False,
                 "is_section_break": True,
             })
             last_tag = None
@@ -844,10 +846,15 @@ def enrich_chapter(
             parts = _segment_text(span_text)
             for part_idx, sentence in enumerate(parts):
                 is_dialogue = is_quote
-                anchor = _anchor(sentence, seen_anchors)
+                anchor = _anchor(prev_sentence, sentence, seen_anchors)
+                prev_sentence = sentence
                 character_name = speaker if is_quote and not single_narrator_mode else None
-                if anchor in speaker_overrides and not single_narrator_mode:
-                    character_name = _canonical(speaker_overrides[anchor], character_map)
+                # A correction naming a character that no longer exists is ignored.
+                override = speaker_overrides.get(anchor)
+                overridden = (anchor in speaker_overrides and not single_narrator_mode
+                              and (override is None or override in character_map))
+                if overridden:
+                    character_name = _canonical(override, character_map)
                 is_whisper = is_quote and bool(_WHISPER_RE.search(sentence) or _WHISPER_RE.search(attribution))
 
                 if character_name:
@@ -881,6 +888,7 @@ def enrich_chapter(
                         "paragraph": paragraph,
                         "span": span_idx,
                         "anchor": anchor,
+                        "overridden": overridden,
                     }
                 )
 
