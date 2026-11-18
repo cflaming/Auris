@@ -46,7 +46,9 @@ const _audioA = document.getElementById('tts-audio');
 const _audioB = (() => { const a = new Audio(); a.preload = 'auto'; return a; })();
 let audio = _audioA; // currently active (playing) element
 
-// Client-side cache: segIdx -> Promise<{audio_url, duration_sec, cache_key, text}>
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Client-side cache: segIdx -> Promise<{audio_url, duration_sec, text, ...}>
 let _segCache = new Map();
 
 // Which segment index is pre-buffered in the standby element, and its data
@@ -391,44 +393,38 @@ function jumpTo(idx) {
 // (no requests) when the window is full. During playback it stands aside: playback
 // preloads its own next segments, and two requests would compete for the TTS lock.
 const BUFFER_AHEAD = 10;
-const BUFFER_RETRY_MS = 5000;     // before retrying a segment whose generation failed
+const BUFFER_RETRY_MS = 5000;     // pause after a failed generation before trying again
 
 async function _startBackgroundBuffer() {
   const myId = ++_bufferGenId;
   const myChapterId = currentChapterId;
-  const cancelled = () => _bufferGenId !== myId || currentChapterId !== myChapterId;
-  const sleep = ms => new Promise(r => setTimeout(r, ms));
-  const failedAt = new Map();                       // idx -> when its last attempt failed
 
-  const needsBuffering = i =>
-    !segments[i]?.has_audio && !_segCache.has(i) && Date.now() - (failedAt.get(i) ?? -Infinity) > BUFFER_RETRY_MS;
-
-  while (!cancelled()) {
-    if (isPlaying) { await sleep(600); continue; }
+  while (_bufferGenId === myId && currentChapterId === myChapterId) {
+    if (isPlaying || document.hidden) { await sleep(isPlaying ? 600 : 3000); continue; }
 
     const end = Math.min(segments.length, currentSegIdx + BUFFER_AHEAD + 1);
     let next = -1;
-    for (let i = currentSegIdx; i < end && next < 0; i++) {
-      if (needsBuffering(i)) next = i;
+    for (let i = currentSegIdx; i < end; i++) {
+      if (!segments[i]?.has_audio && !_segCache.has(i)) { next = i; break; }
     }
     if (next < 0) { await sleep(1000); continue; }   // window is full: wait for the cursor to move
 
     try {
       await fetchSegmentData(next);
+      await sleep(100);                              // let the event loop breathe between generations
     } catch (_) {
-      failedAt.set(next, Date.now());
+      await sleep(BUFFER_RETRY_MS);                  // e.g. the model is still loading: don't hammer it
     }
-    await sleep(100);                                // let the event loop breathe between generations
   }
 }
 
-// What the server's generate endpoint returns for a segment whose audio already exists,
-// built from the segment list so no request is needed.
+// What the generate endpoint returns for a segment whose audio already exists (see
+// generate_segment in app.py), built from the segment list so no request is needed.
 function _localSegmentData(idx) {
   const seg = segments[idx];
-  if (!seg?.has_audio || !seg.cache_key || !seg.duration_sec) return null;
+  if (!seg?.has_audio || !seg.audio_url || !seg.duration_sec) return null;
   return {
-    audio_url: `/api/audio/${seg.cache_key}`, duration_sec: seg.duration_sec, text: seg.text,
+    audio_url: seg.audio_url, duration_sec: seg.duration_sec, text: seg.text,
     character_name: seg.character_name, is_dialogue: seg.is_dialogue, segment_index: idx, cached: true,
   };
 }
@@ -437,42 +433,28 @@ function _localSegmentData(idx) {
 function _rememberGenerated(chapterId, idx, data) {
   const seg = chapterId === currentChapterId ? segments[idx] : null;
   if (!seg || !data.audio_url) return;
-  seg.has_audio = true;
-  seg.duration_sec = data.duration_sec;
-  seg.cache_key = data.audio_url.split('/').pop();
+  Object.assign(seg, { has_audio: true, audio_url: data.audio_url, duration_sec: data.duration_sec });
+}
+
+// Audio that failed to load: forget it, so the next lookup asks the server (which regenerates it).
+function _forgetAudio(idx) {
+  if (segments[idx]) segments[idx].has_audio = false;
+  _segCache.delete(idx);
 }
 
 function fetchSegmentData(idx) {
   if (!_segCache.has(idx)) {
-    const local = _localSegmentData(idx);
-    if (local) {
-      _segCache.set(idx, Promise.resolve(local));
-      return _segCache.get(idx);
-    }
     const chapterId = currentChapterId;
-    const p = fetch('/api/tts/generate', {
+    const post = () => fetch('/api/tts/generate', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ book_id: BOOK_ID, chapter_id: currentChapterId, segment_index: idx }),
-    }).then(r => {
-      if (!r.ok) return r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); });
-      return r.json();
-    }).then(data => {
-      if (!data.duration_sec) {
-        // 0-duration means a bad cache entry — evict and fire one fresh request.
-        _segCache.delete(idx);
-        const retry = fetch('/api/tts/generate', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ book_id: BOOK_ID, chapter_id: currentChapterId, segment_index: idx }),
-        }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); }));
-        retry.catch(() => _segCache.delete(idx));
-        _segCache.set(idx, retry);
-        return retry.then(d => { _rememberGenerated(chapterId, idx, d); return d; });
-      }
-      _rememberGenerated(chapterId, idx, data);
-      return data;
-    });
+      body: JSON.stringify({ book_id: BOOK_ID, chapter_id: chapterId, segment_index: idx }),
+    }).then(r => r.ok ? r.json() : r.json().then(e => { throw new Error(e.error || `HTTP ${r.status}`); }));
+
+    const local = _localSegmentData(idx);
+    // A 0-duration reply means a bad cache entry: ask once more for a fresh one.
+    const p = local ? Promise.resolve(local)
+      : post().then(d => d.duration_sec ? d : post()).then(d => { _rememberGenerated(chapterId, idx, d); return d; });
     // Evict on failure so the next call retries rather than re-throwing the cached rejection.
     p.catch(() => _segCache.delete(idx));
     _segCache.set(idx, p);
@@ -579,6 +561,7 @@ async function _fetchAndAppendSeg(idx, genId) {
     data = await fetchSegmentData(idx);
     if (_mseGenId !== genId || !_sbReady) return false;
     const resp = await fetch(`${data.audio_url}/fmp4`);
+    if (!resp.ok) _forgetAudio(idx);                 // e.g. the file was deleted: re-request next time
     if (!resp.ok || _mseGenId !== genId || !_sbReady) return false;
     buf = await resp.arrayBuffer();
   } catch (_) { return false; }
@@ -945,8 +928,8 @@ function _onAudioError(e) {
   if (e?.target !== audio) return;
   stopWordHighlight();
   if (!isPlaying) return;
-  // Evict cached promise so the segment will be re-fetched on retry
-  _segCache.delete(currentSegIdx);
+  // Forget the audio so the segment is re-requested (and regenerated) on retry
+  _forgetAudio(currentSegIdx);
   // Skip the broken segment rather than stopping entirely
   const next = currentSegIdx + 1;
   if (next < segments.length) playSegment(next);
@@ -1573,7 +1556,7 @@ document.getElementById('do-export-btn').onclick = async () => {
     const jobId = d.job_id;
 
     while (true) {
-      await new Promise(res => setTimeout(res, 800));
+      await sleep(800);
       let sr;
       try { sr = await fetch(`/api/export/status/${jobId}`).then(r => r.json()); }
       catch(_) { continue; }

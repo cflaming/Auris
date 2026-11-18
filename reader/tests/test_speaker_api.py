@@ -160,6 +160,20 @@ def test_a_correction_invalidates_stored_audio(make_book, segments, correct, app
     assert not segments(book)[1]["has_audio"]
 
 
+def test_segments_list_the_audio_url_only_when_audio_is_current(make_book, segments, app_module, tmp_path):
+    book = make_book()
+    segments(book)
+    wav = tmp_path / "a.wav"
+    wav.write_bytes(b"x")
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tts_segments SET audio_path=?, duration_sec=1.0, cache_key='abc123', engine_tag=? "
+            "WHERE book_id=? AND segment_index=1", (str(wav), app_module.tts.cache_tag, book.id))
+    segs = segments(book)
+    assert segs[1]["audio_url"] == "/api/audio/abc123"
+    assert segs[0]["audio_url"] is None                       # no audio yet
+
+
 def test_a_missing_audio_file_does_not_count_as_cached(make_book, segments, app_module, tmp_path):
     book = make_book()
     segments(book)

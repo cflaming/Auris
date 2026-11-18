@@ -206,6 +206,10 @@ def _prune_stale_renders():
             except OSError: pass
 
 
+def _audio_url(cache_key: str) -> str:
+    return f'/api/audio/{cache_key}'
+
+
 def _segment_audio_current(seg: dict) -> bool:
     """True if the segment's stored audio exists and was made by the active engine/version."""
     return bool(seg.get('audio_path') and seg.get('duration_sec')
@@ -978,7 +982,7 @@ def preview_character(book_id, char_id):
             sample_text=sample_text,
             ref_audio=ref_audio,
         )
-        return jsonify({'audio_url': f'/api/audio/{result["cache_key"]}'})
+        return jsonify({'audio_url': _audio_url(result['cache_key'])})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1067,7 +1071,7 @@ def preview_narrator(book_id):
             sample_text=VOICE_PREVIEW_TEXT,
             ref_audio=narrator_ref,
         )
-        return jsonify({'audio_url': f'/api/audio/{result["cache_key"]}'})
+        return jsonify({'audio_url': _audio_url(result['cache_key'])})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1163,7 +1167,7 @@ def _ensure_section_break_audio(seg) -> str:
 def _section_break_silence(seg, segment_index):
     _ensure_section_break_audio(seg)
     return jsonify({
-        'audio_url': f'/api/audio/{_SILENCE_CACHE_KEY}',
+        'audio_url': _audio_url(_SILENCE_CACHE_KEY),
         'duration_sec': _SILENCE_DURATION,
         'text': '',
         'character_name': None,
@@ -1221,7 +1225,7 @@ def tts_generate():
         rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
         _tts_finish(rid, cached=True, duration_sec=seg['duration_sec'])
         return jsonify({
-            'audio_url': f'/api/audio/{seg["cache_key"]}',
+            'audio_url': _audio_url(seg['cache_key']),
             'duration_sec': seg['duration_sec'],
             'text': seg['text'],
             'character_name': seg['character_name'],
@@ -1260,7 +1264,7 @@ def tts_generate():
 
     _tts_finish(rid, cached=result['cache_hit'], duration_sec=result['duration_sec'])
     return jsonify({
-        'audio_url': f'/api/audio/{result["cache_key"]}',
+        'audio_url': _audio_url(result['cache_key']),
         'duration_sec': result['duration_sec'],
         'text': seg['text'],
         'character_name': seg['character_name'],
@@ -1268,6 +1272,24 @@ def tts_generate():
         'segment_index': segment_index,
         'cached': result['cache_hit'],
     })
+
+
+def _segment_json(r) -> dict:
+    """A stored segment row as the reader sees it."""
+    has_audio = _segment_audio_current(dict(r))
+    return {
+        'anchor': r['anchor'],
+        'overridden': bool(r['overridden']),
+        'segment_index': r['segment_index'],
+        'paragraph': r['paragraph'],
+        'span': r['span'],
+        'text': r['text'],
+        'character_name': r['character_name'],
+        'is_dialogue': bool(r['is_dialogue']),
+        'has_audio': has_audio,
+        'audio_url': _audio_url(r['cache_key']) if has_audio else None,
+        'duration_sec': r['duration_sec'],
+    }
 
 
 @app.route('/api/tts/segments/<int:book_id>/<int:chapter_id>')
@@ -1278,19 +1300,7 @@ def get_segments(book_id, chapter_id):
         rows = _ensure_chapter_segments(book_id, chapter_id)
     if not rows:
         return jsonify([])
-    return jsonify([{
-        'anchor': r['anchor'],
-        'overridden': bool(r['overridden']),
-        'segment_index': r['segment_index'],
-        'paragraph': r['paragraph'],
-        'span': r['span'],
-        'text': r['text'],
-        'character_name': r['character_name'],
-        'is_dialogue': bool(r['is_dialogue']),
-        'has_audio': _segment_audio_current(dict(r)),
-        'duration_sec': r['duration_sec'],
-        'cache_key': r['cache_key'],
-    } for r in rows])
+    return jsonify([_segment_json(r) for r in rows])
 
 
 @app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/speaker', methods=['PUT'])
