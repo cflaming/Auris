@@ -15,7 +15,11 @@
 # Tell pip to also search the bundled wheels when doing an offline install.
 --find-links=../wheels
 
-# ── OmniVoice TTS engine ──────────────────────────────────────────────────────
+# ── Kokoro TTS engine (default) ───────────────────────────────────────────────
+kokoro>=0.9.4
+misaki[en]>=0.9.4
+
+# ── OmniVoice TTS engine (optional alternative) ──────────────────────────────────────────────────────
 # omnivoice is NOT on PyPI; install from the bundled wheel (offline) or source:
 #   Offline:  pip install --no-index --find-links=../wheels omnivoice
 #   Source:   pip install ../OmniVoice

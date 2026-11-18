@@ -60,6 +60,14 @@
     </div>
 
     <div class="setting-row" style="margin-top:12px">
+      <label for="tts-engine">TTS engine</label>
+      <select id="tts-engine">
+        <option value="kokoro">Kokoro (default, fast, preset voices)</option>
+        <option value="omnivoice">OmniVoice (voice design &amp; cloning)</option>
+      </select>
+    </div>
+
+    <div class="setting-row" style="margin-top:12px">
       <button class="btn btn-ghost btn-sm" onclick="reloadTTS()">Reload TTS engine</button>
       <span id="tts-reload-hint" class="status-hint"></span>
     </div>

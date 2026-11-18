@@ -62,7 +62,21 @@ def _clear_chapter_renders(book_id: int):
             try: os.remove(p)
             except OSError: pass
 
-tts = TTSEngine()
+def _clear_all_chapter_renders():
+    import glob
+    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, 'b*_c*.*')):
+        try: os.remove(p)
+        except OSError: pass
+
+
+def _make_engine():
+    if app_settings.get('tts_engine', 'kokoro') == 'omnivoice':
+        return TTSEngine()
+    from core.kokoro_engine import KokoroEngine
+    return KokoroEngine()
+
+
+tts = _make_engine()
 
 DEFAULT_NARRATOR_INSTRUCT = app_settings.DEFAULT_NARRATOR_INSTRUCT
 
@@ -1761,12 +1775,18 @@ def save_settings():
     body = request.get_json(force=True) or {}
     previous = app_settings.load()
     allowed = {
-        'model_source', 'model_path', 'model_repo', 'hf_endpoint', 'auto_download_model',
+        'tts_engine', 'model_source', 'model_path', 'model_repo', 'hf_endpoint', 'auto_download_model',
         'narrator_instruct', 'single_narrator_mode', 'default_speed', 'audio_format',
         'subtitle_format', 'theme', 'font_size', 'font_family', 'line_height',
     }
     updates = {k: v for k, v in body.items() if k in allowed}
     result = app_settings.save(updates)
+
+    if 'tts_engine' in updates and updates['tts_engine'] != previous.get('tts_engine'):
+        global tts
+        tts = _make_engine()
+        tts.load_async()
+        _clear_all_chapter_renders()
 
     # If model path changed, reset TTS so it reloads from new path
     if 'model_path' in updates:

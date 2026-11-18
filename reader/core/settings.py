@@ -24,6 +24,7 @@ DEFAULT_NARRATOR_INSTRUCT = 'male, elderly, low pitch, british accent'
 
 DEFAULTS: dict = {
     # Model
+    'tts_engine': 'kokoro',            # 'kokoro' | 'omnivoice'
     'model_source': 'local',           # 'local' | 'download'
     'model_path': _DEFAULT_MODEL_PATH,
     'model_repo': 'k2-fsa/OmniVoice',

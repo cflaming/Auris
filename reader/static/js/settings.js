@@ -7,6 +7,7 @@ async function loadSettings() {
   _settings = await fetch('/api/settings').then(r => r.json());
 
   // Model
+  document.getElementById('tts-engine').value = _settings.tts_engine || 'kokoro';
   const src = _settings.model_source || 'local';
   const srcRadio = document.querySelector(`input[name="model_source"][value="${src}"]`);
   if (srcRadio) srcRadio.checked = true;
@@ -212,6 +213,7 @@ async function installSpacy() {
 async function saveSettings() {
   const src = document.querySelector('input[name="model_source"]:checked')?.value || 'local';
   const payload = {
+    tts_engine:        document.getElementById('tts-engine').value,
     model_source:      src,
     model_path:        document.getElementById('model-path').value.trim(),
     model_repo:        document.getElementById('model-repo').value.trim(),
