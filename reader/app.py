@@ -791,14 +791,38 @@ def get_progress(book_id):
 # Characters API
 # ════════════════════════════════════════════════════════════════════════════
 
+def _ordered_characters(rows) -> list[dict]:
+    """Characters in display order. A character merged into another stays right behind the one it is
+    merged into, and the groups (a character plus whoever is merged into them) are ordered by their
+    combined frequency, so a group moves up as a whole once its total passes another group's.
+    Each entry also gets `group_total`: the combined frequency of its group."""
+    chars = [dict(r) for r in rows]
+    by_id = {c['id']: c for c in chars}
+
+    def head_id(c):
+        target = by_id.get(c['alias_of'])
+        # Merges are one level deep; a missing or itself-merged target leaves the character on its own.
+        return target['id'] if target and target['alias_of'] is None and target['id'] != c['id'] else c['id']
+
+    groups = defaultdict(list)
+    for c in chars:
+        groups[head_id(c)].append(c)
+    ordered = []
+    for head, members in groups.items():
+        members.sort(key=lambda c: (c['id'] != head, -c['frequency'], c['name'].lower()))   # the head first
+        total = sum(c['frequency'] for c in members)
+        for c in members:
+            c['group_total'] = total
+        ordered.append(members)
+    ordered.sort(key=lambda m: (-m[0]['group_total'], -m[0]['frequency'], m[0]['name'].lower()))
+    return [c for members in ordered for c in members]
+
+
 @app.route('/api/books/<int:book_id>/characters')
 def list_characters(book_id):
     with get_conn() as conn:
-        rows = conn.execute(
-            'SELECT * FROM characters WHERE book_id=? ORDER BY frequency DESC',
-            (book_id,)
-        ).fetchall()
-    return jsonify([dict(r) for r in rows])
+        rows = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
+    return jsonify(_ordered_characters(rows))
 
 
 _VALID_GENDERS = {'male', 'female', 'unknown'}

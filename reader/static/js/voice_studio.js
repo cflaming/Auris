@@ -210,11 +210,15 @@ async function loadCharacters() {
       const aliasNote = aliases.length
         ? `<div class="studio-note">Also called: ${aliases.map(esc).join(", ")}</div>`
         : "";
+      // A group is ordered by its combined frequency, so say what it adds up to.
+      const groupTotal = aliases.length
+        ? ` <span class="char-freq" title="The groups are ordered by this combined total">&middot; ${ch.group_total} with ${aliases.length === 1 ? "1 merged" : aliases.length + " merged"}</span>`
+        : "";
       return `
       <div class="character-card" id="card-${ch.id}">
         <div class="char-avatar" style="${avatarStyle}">${initial}</div>
         <div class="char-details">
-          <span class="char-name">${esc(ch.name)} ${genderBadge} <span class="char-freq">x ${ch.frequency}</span></span>
+          <span class="char-name">${esc(ch.name)} ${genderBadge} <span class="char-freq">x ${ch.frequency}</span>${groupTotal}</span>
           ${aliasNote}
           <div class="voice-controls">
             ${buildSelect(GENDERS, v.gender, `g-${ch.id}`)}

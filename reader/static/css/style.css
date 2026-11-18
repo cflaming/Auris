@@ -914,7 +914,7 @@ body.theme-paper .voice-swatch[style] {
   display: flex; align-items: center; gap: 8px; margin-top: 10px;
   font-size: 0.78rem; color: var(--text2);
 }
-.merged-card { opacity: .75; }
+.merged-card { opacity: .75; margin-left: 32px; }       /* sits under the character it is merged into */
 .merged-card .studio-note { margin-top: 0; }
 .clone-section label { font-size: 0.78rem; color: var(--text2); margin-bottom: 4px; display: block; }
 
