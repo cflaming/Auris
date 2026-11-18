@@ -643,7 +643,15 @@ function _isInBuffer(time) {
 let _appendChain = Promise.resolve(true);
 let _lastAppendError = '';        // why the last append failed, for the message when playback can't start
 
+// A request that failed a moment ago (audio still being written, a busy server) usually works a moment later.
+async function _fetchAndAppendWithRetry(idx, genId) {
+  if (await _fetchAndAppendSeg(idx, genId)) return true;
+  await sleep(400);
+  return _mseGenId === genId && _fetchAndAppendSeg(idx, genId);
+}
+
 async function _fetchAndAppendSeg(idx, genId) {
+  _lastAppendError = '';
   if (_mseGenId !== genId || !_sbReady) return false;
   if (_segStart[idx] !== undefined) return true;
   const ch = chapter;
@@ -884,8 +892,7 @@ async function playSegment(idx) {
           : -1;
         for (let i = last + 1; i <= idx; i++) {
           if (gen !== _playGen || !isPlaying) return;
-          // One retry: a request that failed a moment ago (audio still being written, a busy server) usually works now.
-          if (!await _fetchAndAppendSeg(i, genId) && gen === _playGen && isPlaying && !await _fetchAndAppendSeg(i, genId)) {
+          if (!await _fetchAndAppendWithRetry(i, genId)) {
             if (gen !== _playGen) return;
             stopPlayback();
             charEl.textContent = `⚠ Couldn't load audio (${_lastAppendError || 'unknown'}). Press play to retry.`;
@@ -2172,7 +2179,8 @@ function renderImpact(d) {
 
 function onSpeakerSelectChange() {
   const isNew = _speakerChoice === '__new__';
-  document.getElementById('speaker-new').classList.toggle('hidden', !isNew);
+  document.querySelector('.speaker-modal').classList.toggle('showing-new', isNew);     // the new-character view
+  document.getElementById('speaker-title').textContent = isNew ? 'New character' : 'Who\u2019s speaking?';
   renderSpeakerPreview();
   scheduleImpactPreview();
 }
@@ -2290,7 +2298,19 @@ function resetSpeakerSearch() {
   showSpeakerList();
 }
 
+let _speakerBeforeNew = '';     // the choice to go back to if adding a new character is abandoned
+
+// Back out of the new-character view to the speaker list, with the earlier choice restored.
+function cancelNewCharacter() {
+  _speakerChoice = _speakerBeforeNew;
+  _speakerPicked = false;
+  resetSpeakerSearch();
+  onSpeakerSelectChange();
+  document.getElementById('speaker-list').focus();
+}
+
 function chooseSpeakerRow(row) {
+  if (row.kind === 'new' && _speakerChoice !== '__new__') _speakerBeforeNew = _speakerChoice;
   _speakerChoice = row.value;
   _speakerPicked = true;
   const nameBox = document.getElementById('speaker-new-name');
@@ -2316,6 +2336,9 @@ function moveSpeakerActive(step) {
   const input = document.getElementById('speaker-input');
   const list = document.getElementById('speaker-list');
   input.addEventListener('input', showSpeakerList);
+  document.getElementById('speaker-new-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); applySpeaker(false); }        // Enter accepts, Escape (the dialog's) goes back
+  });
 
   // The list and the search box are the two things that take part in picking, and each handles its own
   // keys (focus decides who gets a key, so no other control in the dialog needs excluding): arrows move

@@ -757,7 +757,8 @@ body.theme-paper .voice-swatch[style] {
 .combo-list .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
 .combo-list .sub { color: var(--text3); font-size: 0.78rem; }
 .combo-list .new-row { color: var(--accent); }
-.speaker-new { display: flex; gap: 8px; margin-bottom: 10px; }
+.speaker-new { display: none; gap: 8px; margin-bottom: 10px; }
+.speaker-modal.showing-new .speaker-new { display: flex; }
 .speaker-new .text-input { flex: 1; }
 /* What adding a new character would change, as a summary plus a diff of the sentences. */
 .speaker-impact { font-size: 0.8rem; color: var(--text2); margin-bottom: 12px; line-height: 1.5; }
@@ -1140,7 +1141,7 @@ body.theme-paper .voice-swatch[style] {
 }
 .modal {
   background: var(--bg2); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 28px;
+  border-radius: var(--radius); --modal-pad: 28px; padding: var(--modal-pad);
   min-width: 320px; max-width: 480px; box-shadow: var(--shadow);
 }
 .modal-title {
@@ -1372,4 +1373,23 @@ body.theme-paper .voice-swatch[style] {
   .modal.speaker-modal { max-width: 860px; --dialog-chrome: 300px; --list-h: clamp(9em, calc(100vh - var(--dialog-chrome)), 30em); }
   .speaker-cols { display: grid; grid-template-columns: minmax(0, 1fr) 17rem; gap: 24px; align-items: start; }
   .speaker-cols .speaker-text { max-height: var(--list-h); margin-bottom: 18px; }
+}
+
+/* Adding a new character takes over the dialog (like Debug info), in one column so that what the new
+   character would change has the whole width and as much height as is left: the paragraph and "Apply to"
+   are compacted to make room for it. */
+.speaker-new-footer { display: none; }
+.speaker-modal.showing-new .speaker-new-footer { display: flex; }
+.speaker-modal.showing-new .speaker-field,
+.speaker-modal.showing-new #speaker-footer { display: none; }
+.speaker-modal.showing-new .speaker-cols { display: block; }
+.speaker-modal.showing-new .speaker-text { max-height: 5.5em; margin-bottom: 10px; }
+.speaker-modal.showing-new .speaker-scope { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 12px; }
+/* The list of changes is as long as it is: the dialog scrolls as a whole when needed (one scrollbar), with
+   Back / Add & apply kept in view at the bottom. */
+.speaker-modal.showing-new .diff-list { max-height: none; overflow: visible; }
+.speaker-modal.showing-new .speaker-new-footer {
+  position: sticky; bottom: calc(-1 * var(--modal-pad)); margin: 0 calc(-1 * var(--modal-pad)) calc(-1 * var(--modal-pad));
+  padding: 14px var(--modal-pad);
+  background: var(--bg2); border-top: 1px solid var(--border);
 }

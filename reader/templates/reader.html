@@ -169,7 +169,7 @@
 <!-- Toast container -->
 <div class="modal-overlay hidden" id="speaker-modal" onclick="if (event.target === this) closeSpeakerEditor()">
   <div class="modal speaker-modal">
-    <div class="modal-title">Who&#8217;s speaking?</div>
+    <div class="modal-title" id="speaker-title">Who&#8217;s speaking?</div>
     <div class="modal-body speaker-cols">
       <div class="speaker-col-context">
         <div class="speaker-text" id="speaker-text"></div>
@@ -190,7 +190,7 @@
                  aria-label="Search speakers" placeholder="Search…">
           <ul id="speaker-list" class="combo-list" role="listbox" tabindex="0" aria-label="Speakers"></ul>
         </div>
-        <div class="speaker-new hidden" id="speaker-new">
+        <div class="speaker-new" id="speaker-new">
           <input id="speaker-new-name" class="text-input" type="text" maxlength="60" placeholder="Character name" oninput="scheduleImpactPreview()">
           <select id="speaker-new-gender" class="select-input" onchange="scheduleImpactPreview()">
             <option value="unknown">Gender: unknown</option>
@@ -208,6 +208,10 @@
         <button data-escape class="btn btn-ghost btn-sm debug-link" onclick="hideSpeakerDebug()">&#8592; Back</button>
         <button class="btn btn-sm" onclick="copySpeakerDebug()">Copy</button>
       </div>
+    </div>
+    <div class="modal-footer speaker-new-footer">
+      <button class="btn btn-ghost btn-sm debug-link" data-escape onclick="cancelNewCharacter()">&#8592; Back</button>
+      <button class="btn btn-sm" onclick="applySpeaker(false)" title="Add the character and give them the selected sentences">Add &amp; apply</button>
     </div>
     <div class="modal-footer" id="speaker-footer">
       <button class="btn btn-ghost btn-sm debug-link" onclick="showSpeakerDebug()" title="Details to share when reporting a problem with this sentence">Debug info</button>
