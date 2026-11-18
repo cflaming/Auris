@@ -8,25 +8,20 @@ accent) is mapped deterministically to one of Kokoro's preset voices.
 Reference-audio cloning is not supported and is ignored.
 """
 
+import functools
 import hashlib
 import logging
 import re
-import time
 
 import numpy as np
-import soundfile as sf
 
-from core.tts_engine import (
-    SAMPLE_RATE,
-    TTSEngine,
-    _parse_instruct,
-)
+from core.tts_engine import TTSEngine, _parse_instruct
 
 log = logging.getLogger(__name__)
 
 KOKORO_REPO = "hexgrad/Kokoro-82M"
 
-# voice id -> (gender, tone) ; tone: "low" | "mid" | "high"
+# gender -> tone ("low" | "mid" | "high") -> candidate voice ids
 _AMERICAN = {
     "male": {"low": ["am_michael", "am_onyx"], "mid": ["am_adam", "am_eric", "am_liam"],
              "high": ["am_puck", "am_fenix"]},
@@ -34,15 +29,16 @@ _AMERICAN = {
                "high": ["af_sky", "af_jessica", "af_kore"]},
 }
 _BRITISH = {
-    "male": {"low": ["bm_george", "bm_lewis"], "mid": ["bm_daniel", "bm_fable"],
+    "male": {"low": ["bm_george", "bm_lewis"], "mid": ["bm_daniel"],
              "high": ["bm_fable"]},
-    "female": {"low": ["bf_emma"], "mid": ["bf_emma", "bf_isabella"],
+    "female": {"low": ["bf_emma"], "mid": ["bf_isabella"],
                "high": ["bf_isabella", "bf_lily"]},
 }
 
 _TAG_RE = re.compile(r"\[[A-Za-z][A-Za-z\- ]*\]")  # OmniVoice expression tags, e.g. [laughter]
 
 
+@functools.lru_cache(maxsize=256)
 def pick_voice(instruct: str | None) -> str:
     parts = _parse_instruct(instruct or "")
     gender = parts["gender"] or "female"
@@ -83,12 +79,7 @@ class KokoroEngine(TTSEngine):
         self.load_async()
 
     def _pipeline(self, lang: str):
-        pipe = self._pipelines.get(lang)
-        if pipe is None:
-            from kokoro import KPipeline
-            pipe = KPipeline(lang_code=lang, repo_id=KOKORO_REPO)
-            self._pipelines[lang] = pipe
-        return pipe
+        return self._pipelines[lang]
 
     def _load(self):
         with self._lock:
@@ -97,7 +88,13 @@ class KokoroEngine(TTSEngine):
             self._loading = True
             self._error = None
         try:
-            self._pipeline("a")  # downloads weights on first run
+            from kokoro import KModel, KPipeline
+            kmodel = KModel(repo_id=KOKORO_REPO).eval()  # downloads weights on first run
+            # American ("a") and British ("b") differ only in G2P; share one model.
+            self._pipelines = {
+                lang: KPipeline(lang_code=lang, repo_id=KOKORO_REPO, model=kmodel)
+                for lang in ("a", "b")
+            }
             self._ready = True
             log.info("Kokoro ready.")
         except Exception as exc:

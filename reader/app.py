@@ -55,18 +55,14 @@ def _chapter_render_m4a(book_id: int, chapter_id: int) -> str:
     return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.m4a')
 
 
-def _clear_chapter_renders(book_id: int):
+def _clear_chapter_renders(book_id: int | None = None):
+    """Delete cached chapter renders for one book, or for all books if book_id is None."""
     import glob
+    prefix = 'b*' if book_id is None else f'b{book_id}'
     for ext in ('fmp4', 'm4a', 'json'):
-        for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c*.{ext}')):
+        for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, f'{prefix}_c*.{ext}')):
             try: os.remove(p)
             except OSError: pass
-
-def _clear_all_chapter_renders():
-    import glob
-    for p in glob.glob(os.path.join(_CHAPTER_RENDER_DIR, 'b*_c*.*')):
-        try: os.remove(p)
-        except OSError: pass
 
 
 def _make_engine():
@@ -1772,6 +1768,7 @@ def get_settings():
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
+    global tts
     body = request.get_json(force=True) or {}
     previous = app_settings.load()
     allowed = {
@@ -1783,13 +1780,13 @@ def save_settings():
     result = app_settings.save(updates)
 
     if 'tts_engine' in updates and updates['tts_engine'] != previous.get('tts_engine'):
-        global tts
         tts = _make_engine()
         tts.load_async()
-        _clear_all_chapter_renders()
+        _clear_chapter_renders()
 
-    # If model path changed, reset TTS so it reloads from new path
-    if 'model_path' in updates:
+    # If model path changed, reset OmniVoice so it reloads from the new path
+    # (model_path is meaningless to Kokoro).
+    if 'model_path' in updates and isinstance(tts, TTSEngine) and tts.engine_name == 'omnivoice':
         tts.model_path = updates['model_path']
         tts._ready = False
         tts._error = None

@@ -134,6 +134,8 @@ def _audio_zcr(audio: np.ndarray) -> float:
 
 
 class TTSEngine:
+    engine_name = "omnivoice"
+
     def __init__(self, model_path: str = ""):
         self.model_path = model_path
         self.model = None
