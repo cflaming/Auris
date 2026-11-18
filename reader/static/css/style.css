@@ -733,19 +733,20 @@ body.theme-paper .voice-swatch[style] {
 }
 .speaker-text .sp-sent.target { font-weight: 600; }
 .speaker-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
-.combo { position: relative; }
-.combo .text-input { width: 100%; }
+/* The speaker list is part of the dialog and always shown, at a fixed height so that picking a name or
+   filtering never changes the dialog's size and the Apply button stays where the mouse is. */
 .combo-list {
-  position: absolute; left: 0; right: 0; top: calc(100% + 2px); z-index: 5;
-  max-height: 14em; overflow: auto; margin: 0; padding: 3px 0; list-style: none;
+  height: 24em; overflow: auto; margin: 0; padding: 3px 0; list-style: none;
   background: var(--bg2); border: 1px solid var(--border); border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .25);
 }
-/* With a mouse and room to spare, the list is open as soon as the dialog is, and sits in the flow
-   (pushing the rest of the dialog down) instead of floating over it. */
-@media (hover: hover) and (min-width: 700px) {
-  .speaker-modal .combo-list { position: static; max-height: 24em; margin-top: 4px; box-shadow: none; }
-}
+.combo-list:focus-visible { outline: 1px solid var(--accent); }
+@media (max-width: 699px), (hover: none) { .combo-list { height: 14em; } }
+/* The search box takes the place of the heading row, at the same height, so showing it never moves anything. */
+.speaker-head, .speaker-field .text-input { height: 32px; box-sizing: border-box; margin: 0; }
+.speaker-head { display: flex; align-items: center; gap: 8px; }
+.speaker-head b { color: var(--accent); font-weight: 600; }
+.speaker-head .btn { margin-left: auto; }
+.speaker-field .text-input { width: 100%; }
 .combo-list li { padding: 5px 10px; cursor: pointer; display: flex; align-items: baseline; gap: 8px; }
 .combo-list li.active { background: var(--bg3); }
 .combo-list li.heading { cursor: default; font-size: 0.68rem; letter-spacing: .06em; text-transform: uppercase; color: var(--text3); padding-top: 7px; }

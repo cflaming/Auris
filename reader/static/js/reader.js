@@ -1911,9 +1911,7 @@ function openSpeakerEditor(idx = currentSegIdx) {
   _speakerEditIdx = idx;
 
   _speakerChoice = seg.character_name || '';
-  _speakerTyped = false;
-  document.getElementById('speaker-input').value = _speakerChoice || 'Narrator';
-  hideSpeakerList();
+  resetSpeakerSearch();
 
   const n = scope => _speakerScopeIndices(idx, scope).length;
   document.getElementById('speaker-quote-n').textContent = `(${n('quote')} sentence${n('quote') === 1 ? '' : 's'})`;
@@ -1924,8 +1922,7 @@ function openSpeakerEditor(idx = currentSegIdx) {
   document.getElementById('speaker-new-name').value = '';
   onSpeakerSelectChange();
   document.getElementById('speaker-modal').classList.remove('hidden');
-  // Desktop: land in the box with the list already open. (On a phone that would raise the keyboard.)
-  if (matchMedia('(hover: hover) and (min-width: 700px)').matches) document.getElementById('speaker-input').focus();
+  document.getElementById('speaker-list').focus();       // so the keyboard works at once: type to search, arrows, Enter
 }
 
 // Show the whole paragraph; underline what the chosen scope will change, in the
@@ -1948,8 +1945,7 @@ function renderSpeakerPreview() {
 }
 
 function closeSpeakerEditor() {
-  document.getElementById('speaker-input').blur();       // so the reader's keyboard shortcuts work again straight away
-  hideSpeakerList();
+  document.activeElement?.blur();       // so the reader's keyboard shortcuts work again straight away
   document.getElementById('speaker-modal').classList.add('hidden');
   _speakerEditIdx = -1;
   resetImpactPreview();
@@ -2116,6 +2112,9 @@ function buildSpeakerRows(query) {
   return rows;
 }
 
+// The list is always shown, as part of the dialog, at a fixed size (so nothing moves when a name is
+// picked or the list is filtered). The search box is hidden until you start typing, or press
+// "Search" on a device with no keyboard to type on.
 function showSpeakerList() {
   const input = document.getElementById('speaker-input');
   _speakerRows = buildSpeakerRows(_speakerTyped ? input.value : '');
@@ -2129,24 +2128,38 @@ function showSpeakerList() {
     const sub = r.sub ? `<span class="sub">(${esc(r.sub)})</span>` : '';
     return `<li role="option" data-i="${i}" class="${r.kind === 'new' ? 'new-row' : ''}${i === _speakerActive ? ' active' : ''}">${dot}${esc(r.label)}${sub}</li>`;
   }).join('') : '<li class="empty">No match</li>';
-  list.classList.remove('hidden');
-  input.setAttribute('aria-expanded', 'true');
   list.querySelector('.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-function hideSpeakerList() {
-  document.getElementById('speaker-list').classList.add('hidden');
-  document.getElementById('speaker-input').setAttribute('aria-expanded', 'false');
+const _speakerChoiceLabel = () => _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
+
+// Reveal the search box (optionally starting with some text) and filter by it.
+function revealSpeakerSearch(text = '') {
+  const input = document.getElementById('speaker-input');
+  document.getElementById('speaker-head').classList.add('hidden');
+  input.classList.remove('hidden');
+  input.value = text;
+  _speakerTyped = true;
+  input.focus();
+  showSpeakerList();
+}
+
+// Put the dialog back to "everyone listed, no search box".
+function resetSpeakerSearch() {
+  const input = document.getElementById('speaker-input');
+  document.getElementById('speaker-head').classList.remove('hidden');
+  input.classList.add('hidden');
+  input.value = '';
+  _speakerTyped = false;
+  document.getElementById('speaker-current').textContent = _speakerChoiceLabel();
+  showSpeakerList();
 }
 
 function chooseSpeakerRow(row) {
-  const input = document.getElementById('speaker-input');
   _speakerChoice = row.value;
-  _speakerTyped = false;
-  input.value = row.kind === 'new' ? 'New character…' : row.label;
-  hideSpeakerList();
   const nameBox = document.getElementById('speaker-new-name');
   if (row.kind === 'new' && row.newName) nameBox.value = row.newName;
+  resetSpeakerSearch();
   onSpeakerSelectChange();
   if (row.kind === 'new') nameBox.focus();
 }
@@ -2160,46 +2173,51 @@ function moveSpeakerActive(step) {
   document.querySelector('#speaker-list li.active')?.scrollIntoView({ block: 'nearest' });
 }
 
-// Escape closes the dialog from anywhere in it (the box, the list, the new-character fields, the
-// scope choices). The reader's own key handler ignores keys typed in a field, so it is done here.
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape' && !document.getElementById('speaker-modal').classList.contains('hidden')) {
-    e.preventDefault();
-    closeSpeakerEditor();
-  }
-});
-
 (function wireSpeakerPicker() {
+  const modal = document.getElementById('speaker-modal');
   const input = document.getElementById('speaker-input');
   const list = document.getElementById('speaker-list');
-  input.addEventListener('focus', () => { input.select(); showSpeakerList(); });
-  input.addEventListener('click', () => { if (list.classList.contains('hidden')) showSpeakerList(); });
+  const isTextField = el => el.matches?.('input[type="text"], textarea, select');
+
   input.addEventListener('input', () => { _speakerTyped = true; showSpeakerList(); });
-  input.addEventListener('keydown', e => {
-    const open = !list.classList.contains('hidden');
-    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+
+  // Keys anywhere in the dialog (the box is hidden, so focus is usually on the list): typing starts
+  // a search, arrows move through the list, Enter picks the highlighted name.
+  modal.addEventListener('keydown', e => {
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const inSearch = e.target === input;
+    if (!inSearch && isTextField(e.target)) return;                      // the new-character fields etc.
+    if (e.key.length === 1 && !inSearch && e.target.type !== 'radio' && e.target.tagName !== 'BUTTON' && e.key !== ' ') {
+      e.preventDefault();                                                 // the character goes into the box instead
+      revealSpeakerSearch(e.key);
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (e.target.type === 'radio') return;
       e.preventDefault();
-      if (!open) showSpeakerList(); else moveSpeakerActive(e.key === 'ArrowDown' ? 1 : -1);
-    } else if (e.key === 'Enter') {
+      moveSpeakerActive(e.key === 'ArrowDown' ? 1 : -1);
+    } else if (e.key === 'Enter' && (inSearch || e.target === list)) {
       e.preventDefault();
-      if (open && _speakerRows[_speakerActive]) chooseSpeakerRow(_speakerRows[_speakerActive]);
+      if (_speakerRows[_speakerActive]) chooseSpeakerRow(_speakerRows[_speakerActive]);
     }
   });
-  // Pressing on a row must not take focus from the box (that would close the list before the click lands).
+
+  // Pressing on a row must not take focus away from the box or list (that would end a search early).
   list.addEventListener('mousedown', e => {
     e.preventDefault();
     const li = e.target.closest('li[data-i]');
-    if (li) chooseSpeakerRow(_speakerRows[+li.dataset.i]);
+    if (!li) return;
+    const row = _speakerRows[+li.dataset.i];
+    chooseSpeakerRow(row);
+    // A double-click picks the name and applies it. (Decided on the second press, not a dblclick
+    // event: the first press redraws the list, so there is no single element for one to land on.)
+    if (e.detail >= 2 && row.kind !== 'new') applySpeaker(false);
   });
+
   input.addEventListener('blur', () => {
-    if (_speakerTyped) {           // typed an exact name and moved on: take it; anything else goes back to the last choice
-      const q = input.value.trim().toLowerCase();
-      const exact = buildSpeakerRows(input.value).find(r => r.kind !== 'new' && r.label.toLowerCase() === q);
-      if (exact) { chooseSpeakerRow(exact); return; }
-      input.value = _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
-      _speakerTyped = false;
-    }
-    hideSpeakerList();
+    if (!_speakerTyped) return;
+    const q = input.value.trim().toLowerCase();
+    const exact = q && buildSpeakerRows(input.value).find(r => r.kind !== 'new' && r.label.toLowerCase() === q);
+    if (exact) chooseSpeakerRow(exact);          // typed an exact name and moved on: take it
+    else resetSpeakerSearch();                   // anything else: back to the last choice
   });
 })();
 
