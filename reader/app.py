@@ -822,13 +822,46 @@ def _ordered_characters(rows) -> list[dict]:
 def list_characters(book_id):
     with get_conn() as conn:
         rows = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
-        last = dict(conn.execute(
-            'SELECT character_name, MAX(updated_at) FROM segment_speakers '
-            'WHERE book_id=? AND character_name IS NOT NULL GROUP BY character_name', (book_id,)).fetchall())
+        usage = {r[0]: (r[1], r[2]) for r in conn.execute(
+            'SELECT character_name, MAX(updated_at), COUNT(*) FROM segment_speakers '
+            'WHERE book_id=? AND character_name IS NOT NULL GROUP BY character_name', (book_id,))}
     chars = _ordered_characters(rows)
+    merged_into = {c['alias_of'] for c in chars if c['alias_of'] is not None}
     for c in chars:
-        c['last_override_at'] = last.get(c['name'])     # when a sentence was last assigned to them by hand
+        last, assigned = usage.get(c['name'], (None, 0))
+        c['last_override_at'] = last                    # when a sentence was last assigned to them by hand
+        c['deletable'] = _delete_blocker(c, assigned, c['id'] in merged_into) is None
     return jsonify(chars)
+
+
+def _delete_blocker(char, assigned_by_hand: int, has_merged: bool):
+    """Why a character can't be deleted, or None if it can. Only hand-added characters can go, and only
+    while nothing was assigned to them by hand and no one is merged into them: those would be lost."""
+    if not char['manual']:
+        return 'Only characters you added by hand can be deleted.'
+    if assigned_by_hand:
+        return f'{assigned_by_hand} sentence(s) were assigned to them by hand: reset those first.'
+    if has_merged:
+        return 'Other characters are merged into them: unmerge those first.'
+    return None
+
+
+@app.route('/api/books/<int:book_id>/characters/<int:char_id>', methods=['DELETE'])
+def delete_character(book_id, char_id):
+    with get_conn() as conn:
+        char = conn.execute('SELECT * FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
+        if not char:
+            return jsonify({'error': 'Character not found'}), 404
+        assigned = conn.execute('SELECT COUNT(*) FROM segment_speakers WHERE book_id=? AND character_name=?',
+                                (book_id, char['name'])).fetchone()[0]
+        merged = conn.execute('SELECT 1 FROM characters WHERE book_id=? AND alias_of=?', (book_id, char_id)).fetchone()
+        blocker = _delete_blocker(char, assigned, bool(merged))
+        if blocker:
+            return jsonify({'error': blocker}), 409
+        conn.execute('DELETE FROM characters WHERE id=?', (char_id,))
+    # Their name no longer takes part in automatic attribution, so rebuild segments.
+    _clear_book_tts_segments(book_id)
+    return jsonify({'deleted': char['name']})
 
 
 _VALID_GENDERS = {'male', 'female', 'unknown'}
@@ -941,8 +974,8 @@ def add_character(book_id):
     new = _new_character(name, gender)
     with get_conn() as conn:
         conn.execute(
-            'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex) '
-            'VALUES (?,?,?,?,?,?)',
+            'INSERT INTO characters (book_id, name, gender, frequency, instruct, color_hex, manual, added_at) '
+            "VALUES (?,?,?,?,?,?,1,datetime('now'))",
             (book_id, name, gender, _count_name_mentions(conn, book_id, name),
              new['instruct'], new['color_hex'])
         )

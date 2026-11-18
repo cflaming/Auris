@@ -161,6 +161,11 @@ def init_db():
             # Another character (same book) this one is merged into, e.g. a
             # hero name for a civilian name. Its lines use that voice.
             conn.execute("ALTER TABLE characters ADD COLUMN alias_of INTEGER")
+        if "manual" not in char_cols:
+            # Added by hand (not found by the detector). Only these can be deleted, and the list of them
+            # is a record of what the detector missed.
+            conn.execute("ALTER TABLE characters ADD COLUMN manual INTEGER NOT NULL DEFAULT 0")
+            conn.execute("ALTER TABLE characters ADD COLUMN added_at TEXT")
 
         seg_cols = {
             row["name"]

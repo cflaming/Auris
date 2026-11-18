@@ -230,6 +230,7 @@ async function loadCharacters() {
             <span class="instruct-preview" id="ins-${ch.id}">${esc(ch.instruct)}</span>
             <button class="btn btn-sm btn-ghost preview-btn" onclick="previewChar(${ch.id})">&#9654; Preview</button>
             <button class="btn btn-sm btn-primary" id="save-${ch.id}" disabled onclick="saveChar(${ch.id})">Save</button>
+            ${ch.deletable ? `<button class="btn btn-sm btn-ghost" data-name="${esc(ch.name)}" onclick="deleteChar(${ch.id}, this.dataset.name)" title="You added this character by hand and nothing uses it yet">Delete</button>` : ""}
           </div>
           <div class="clone-section">
             <label>Or upload reference audio (WAV) for voice cloning:</label>
@@ -255,6 +256,13 @@ async function loadCharacters() {
     });
     updateInstructPreview(ch.id);
   });
+}
+
+async function deleteChar(charId, name) {
+  if (!confirm(`Delete ${name}? Their lines go back to being detected without them.`)) return;
+  const r = await fetch(`/api/books/${BOOK_ID}/characters/${charId}`, { method: "DELETE" });
+  if (!r.ok) { alert(`Delete failed: ${(await r.json()).error}`); return; }
+  loadCharacters();
 }
 
 async function setAlias(charId, value) {
@@ -401,6 +409,7 @@ loadCharacters();
 
 window.saveChar = saveChar;
 window.setAlias = setAlias;
+window.deleteChar = deleteChar;
 window.previewChar = previewChar;
 window.uploadRef = uploadRef;
 window.uploadNarratorRef = uploadNarratorRef;

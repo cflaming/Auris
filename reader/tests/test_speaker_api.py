@@ -253,3 +253,57 @@ def test_hand_added_characters_at_zero_are_backfilled_on_startup(make_book, clie
     with get_conn() as conn:
         freq = conn.execute("SELECT frequency FROM characters WHERE book_id=? AND name='Dean'", (book.id,)).fetchone()[0]
     assert freq == CHAPTER_ONE.count("Dean") > 0
+
+
+# ── Deleting a character you added by hand ───────────────────────────────────
+
+def _char(client, book, name):
+    return next(c for c in client.get(f"/api/books/{book.id}/characters").json if c["name"] == name)
+
+
+def test_a_hand_added_character_can_be_deleted_and_detection_forgets_them(make_book, segments, client):
+    book = make_book(NO_DEAN)
+    client.post(f"/api/books/{book.id}/characters", json={"name": "Dean", "gender": "male"})
+    dean = _char(client, book, "Dean")
+    assert dean["manual"] == 1 and dean["added_at"] and dean["deletable"]
+    assert "Dean" in {n for _, n in spoken(segments(book))}
+
+    assert client.delete(f"/api/books/{book.id}/characters/{dean['id']}").status_code == 200
+    assert "Dean" not in {c["name"] for c in client.get(f"/api/books/{book.id}/characters").json}
+    assert "Dean" not in {n for _, n in spoken(segments(book))}
+
+
+def test_detected_characters_cannot_be_deleted(make_book, client):
+    book = make_book()
+    amy = _char(client, book, "Amy")
+    assert amy["manual"] == 0 and not amy["deletable"]
+    assert client.delete(f"/api/books/{book.id}/characters/{amy['id']}").status_code == 409
+    assert _char(client, book, "Amy")
+
+
+def test_a_character_with_hand_assigned_sentences_cannot_be_deleted(make_book, segments, correct, client):
+    book = make_book(NO_DEAN)
+    client.post(f"/api/books/{book.id}/characters", json={"name": "Evelyn", "gender": "female"})
+    target = by_text(segments(book), '"Then when?"')
+    correct(book, [target["anchor"]], "Evelyn")
+    evelyn = _char(client, book, "Evelyn")
+
+    assert not evelyn["deletable"]
+    res = client.delete(f"/api/books/{book.id}/characters/{evelyn['id']}")
+    assert res.status_code == 409 and "reset" in res.json["error"]
+    assert by_text(segments(book), '"Then when?"')["character_name"] == "Evelyn"
+
+
+def test_a_character_others_are_merged_into_cannot_be_deleted(make_book, client):
+    book = make_book(NO_DEAN)
+    client.post(f"/api/books/{book.id}/characters", json={"name": "Dean", "gender": "male"})
+    dean, amy = _char(client, book, "Dean"), _char(client, book, "Amy")
+    client.put(f"/api/books/{book.id}/characters/{amy['id']}", json={"alias_of": dean["id"]})
+
+    assert not _char(client, book, "Dean")["deletable"]
+    assert client.delete(f"/api/books/{book.id}/characters/{dean['id']}").status_code == 409
+
+
+def test_deleting_an_unknown_character_is_a_404(make_book, client):
+    book = make_book()
+    assert client.delete(f"/api/books/{book.id}/characters/99999").status_code == 404
