@@ -44,16 +44,26 @@ _CHAPTER_RENDER_DIR = os.path.join(_ACD, 'chapter_renders')
 os.makedirs(_CHAPTER_RENDER_DIR, exist_ok=True)
 
 
+def _render_tag() -> str:
+    return tts.cache_tag.replace(':', '-')
+
+
+def _chapter_render_path(book_id: int, chapter_id: int, ext: str) -> str:
+    # The engine tag is part of the name, so renders made by another engine (or an
+    # older output version) are simply never found and get re-rendered.
+    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}_{_render_tag()}.{ext}')
+
+
 def _chapter_render_fmp4(book_id: int, chapter_id: int) -> str:
-    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.fmp4')
+    return _chapter_render_path(book_id, chapter_id, 'fmp4')
 
 
 def _chapter_render_meta(book_id: int, chapter_id: int) -> str:
-    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.json')
+    return _chapter_render_path(book_id, chapter_id, 'json')
 
 
 def _chapter_render_m4a(book_id: int, chapter_id: int) -> str:
-    return os.path.join(_CHAPTER_RENDER_DIR, f'b{book_id}_c{chapter_id}.m4a')
+    return _chapter_render_path(book_id, chapter_id, 'm4a')
 
 
 def _clear_chapter_renders(book_id: int | None = None):
@@ -166,7 +176,7 @@ def _startup():
             return
         try:
             init_db()
-            _sync_audio_cache_tag()
+            _prune_stale_renders()
         except Exception:
             tts.load_async()
             raise
@@ -174,16 +184,20 @@ def _startup():
         _startup_complete = True
 
 
-def _sync_audio_cache_tag():
-    """Drop stored segment audio and chapter renders made by a different engine
-    or an older version of this engine's output processing."""
-    tag = tts.cache_tag
-    if app_settings.get('tts_cache_tag') == tag:
-        return
-    with get_conn() as conn:
-        conn.execute('UPDATE tts_segments SET audio_path=NULL, duration_sec=NULL, generation_sec=NULL')
-    _clear_chapter_renders()
-    app_settings.save({'tts_cache_tag': tag})
+def _prune_stale_renders():
+    """Delete chapter renders made by another engine or an older output version."""
+    keep = f'_{_render_tag()}.'
+    for name in os.listdir(_CHAPTER_RENDER_DIR):
+        if keep not in name:
+            try: os.remove(os.path.join(_CHAPTER_RENDER_DIR, name))
+            except OSError: pass
+
+
+def _segment_audio_current(seg: dict) -> bool:
+    """True if the segment's stored audio exists and was made by the active engine/version."""
+    return bool(seg.get('audio_path') and seg.get('duration_sec')
+                and seg.get('engine_tag') == tts.cache_tag
+                and os.path.exists(seg['audio_path']))
 
 
 def _default_narrator_instruct() -> str:
@@ -447,7 +461,7 @@ def _scan_orphans() -> dict:
             orphan_wavs.append({'filename': fname, 'path': fpath, 'size_bytes': size})
 
     # --- orphan chapter renders: b{book}_c{chapter}.* with unknown ids ---
-    render_pattern = re.compile(r'^b(\d+)_c(\d+)\.')
+    render_pattern = re.compile(r'^b(\d+)_c(\d+)[._]')
     orphan_renders = []
     seen_render_keys = set()
     for fname in os.listdir(_CHAPTER_RENDER_DIR):
@@ -996,8 +1010,8 @@ def _ensure_section_break_audio(seg) -> str:
     if seg.get('cache_key') != _SILENCE_CACHE_KEY:
         with get_conn() as conn:
             conn.execute(
-                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
-                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, 0.0, seg['id'])
+                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
+                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, 0.0, tts.cache_tag, seg['id'])
             )
     return wav_path
 
@@ -1059,7 +1073,7 @@ def tts_generate():
     if not seg.get('text'):
         return _section_break_silence(seg, segment_index)
 
-    if seg.get('audio_path') and os.path.exists(seg['audio_path']) and seg.get('duration_sec'):
+    if _segment_audio_current(seg):
         rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
         _tts_finish(rid, cached=True, duration_sec=seg['duration_sec'])
         return jsonify({
@@ -1096,8 +1110,8 @@ def tts_generate():
 
     with get_conn() as conn:
         conn.execute(
-            'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
-            (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], seg['id'])
+            'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
+            (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], tts.cache_tag, seg['id'])
         )
 
     _tts_finish(rid, cached=result['cache_hit'], duration_sec=result['duration_sec'])
@@ -1126,7 +1140,7 @@ def get_segments(book_id, chapter_id):
         'text': r['text'],
         'character_name': r['character_name'],
         'is_dialogue': bool(r['is_dialogue']),
-        'has_audio': bool(r['audio_path']),
+        'has_audio': r['engine_tag'] == tts.cache_tag and bool(r['audio_path']),
         'duration_sec': r['duration_sec'],
         'cache_key': r['cache_key'],
     } for r in rows])
@@ -1454,7 +1468,7 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
 
     items, pending_segs = [], []
     for seg in segs:
-        if seg.get('audio_path') and os.path.exists(seg['audio_path']) and seg.get('duration_sec'):
+        if _segment_audio_current(seg):
             _tick()
             continue
         if not seg.get('text'):  # section break — use shared silence, not TTS
@@ -1479,8 +1493,8 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
             try:
                 with get_conn() as conn:
                     conn.execute(
-                        'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=? WHERE id=?',
-                        (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], seg['id'])
+                        'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
+                        (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], tts.cache_tag, seg['id'])
                     )
                 seg['audio_path'] = result['audio_path']
                 seg['duration_sec'] = result['duration_sec']
@@ -1785,12 +1799,11 @@ def save_settings():
     updates = {k: v for k, v in body.items() if k in allowed}
     if 'tts_engine' in updates:
         try:  # switch first so an invalid/unloadable engine is never persisted
-            tts.set_engine(updates['tts_engine'])
+            if tts.set_engine(updates['tts_engine']):
+                _prune_stale_renders()
         except ValueError as exc:
             return jsonify({'error': str(exc)}), 400
     result = app_settings.save(updates)
-
-    _sync_audio_cache_tag()
 
     tts.apply_settings(updates)
 

@@ -74,7 +74,7 @@ def pick_voice(instruct: str | None) -> str:
 
 class KokoroEngine(BaseEngine):
     engine_name = "kokoro"
-    cache_tag = f"kokoro:{_CACHE_VERSION}"
+    cache_version = _CACHE_VERSION
 
     def __init__(self):
         super().__init__()

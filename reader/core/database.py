@@ -134,6 +134,8 @@ def init_db():
         }
         if "generation_sec" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN generation_sec REAL")
+        if "engine_tag" not in seg_cols:
+            conn.execute("ALTER TABLE tts_segments ADD COLUMN engine_tag TEXT")
         if "paragraph" not in seg_cols:
             conn.execute("ALTER TABLE tts_segments ADD COLUMN paragraph INTEGER DEFAULT 0")
 
