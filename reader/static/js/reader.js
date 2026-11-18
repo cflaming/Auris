@@ -1867,6 +1867,8 @@ function openSpeakerEditor(idx = currentSegIdx) {
   document.getElementById('speaker-new-name').value = '';
   onSpeakerSelectChange();
   document.getElementById('speaker-modal').classList.remove('hidden');
+  // Desktop: land in the box with the list already open. (On a phone that would raise the keyboard.)
+  if (matchMedia('(hover: hover) and (min-width: 700px)').matches) document.getElementById('speaker-input').focus();
 }
 
 // Show the whole paragraph; underline what the chosen scope will change, in the
@@ -1889,6 +1891,7 @@ function renderSpeakerPreview() {
 }
 
 function closeSpeakerEditor() {
+  document.getElementById('speaker-input').blur();       // so the reader's keyboard shortcuts work again straight away
   hideSpeakerList();
   document.getElementById('speaker-modal').classList.add('hidden');
   _speakerEditIdx = -1;
