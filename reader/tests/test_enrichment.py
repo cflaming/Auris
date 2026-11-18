@@ -2,7 +2,9 @@
 
 from core import enrichment
 from core.characters import generate_voice_profile
-from tests.demo_story import CHAPTER_ONE, CHAPTER_TWO, CHARACTERS
+import pytest
+
+from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE, CHAPTER_TWO, CHARACTERS
 from tests.helpers import by_text, spoken
 
 REPEATED_NO = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
@@ -71,6 +73,28 @@ def test_correcting_one_repeated_sentence_leaves_the_other_alone():
     first = next(s for s in enrich(REPEATED_NO) if s["text"] == '"No,"')
     fixed = [s for s in enrich(REPEATED_NO, {first["anchor"]: "Amy"}) if s["text"] == '"No,"']
     assert [s["character_name"] for s in fixed] == ["Amy", "Carol"]
+
+
+def no_lines(text, overrides=None):
+    """The '"No,"' segments of a text, in order."""
+    return [s for s in enrich(text, overrides) if s["text"] == '"No,"']
+
+
+def test_fully_ambiguous_repeats_are_told_apart_by_occurrence():
+    first, second = no_lines(AMBIGUOUS_REPEAT)
+    assert first["anchor"] != second["anchor"]                # same sentence, same predecessor
+
+    fixed = no_lines(AMBIGUOUS_REPEAT, {second["anchor"]: "Amy"})
+    assert [(s["character_name"], s["overridden"]) for s in fixed] == [("Dean", False), ("Amy", True)]
+
+
+@pytest.mark.xfail(strict=True, reason="known limitation: anchors count occurrences, so inserting "
+                   "an earlier identical pair shifts a correction onto the wrong repeat")
+def test_a_correction_stays_on_its_sentence_when_an_identical_pair_is_inserted_earlier():
+    second = no_lines(AMBIGUOUS_REPEAT)[1]
+    longer = 'Nobody spoke. "No," Dean said.\n\n' + AMBIGUOUS_REPEAT       # the corrected line is now third
+    fixed = no_lines(longer, {second["anchor"]: "Amy"})
+    assert [s["overridden"] for s in fixed] == [False, False, True]
 
 
 def test_override_changes_speaker_and_voice_only_for_that_sentence():

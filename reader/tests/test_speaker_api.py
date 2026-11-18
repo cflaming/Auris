@@ -1,7 +1,7 @@
 """Speaker corrections and character management through the HTTP API."""
 
 from core.database import get_conn
-from tests.demo_story import CHAPTER_ONE
+from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE
 from tests.helpers import by_text, spoken
 
 NO_DEAN = [("Amy", "female"), ("Carol", "female")]   # Dean not detected yet
@@ -27,6 +27,25 @@ def test_correct_one_sentence(make_book, segments, correct):
     assert [s["character_name"] for s in after if s is not fixed and s["text"] != '"Then when?"'] == \
            [s["character_name"] for s in before if s["text"] != '"Then when?"']
     assert sum(s["overridden"] for s in after) == 1
+
+
+def test_repeated_identical_lines_are_corrected_independently(make_book, segments, correct, client):
+    book = make_book(chapters=(AMBIGUOUS_REPEAT,))
+    no_lines = lambda: [s for s in segments(book) if s["text"] == '"No,"']
+    first, second = no_lines()
+    assert first["anchor"] != second["anchor"]
+
+    assert correct(book, [second["anchor"]], "Amy").status_code == 200
+    state = lambda: [(s["character_name"], s["overridden"]) for s in no_lines()]
+    assert state() == [("Dean", False), ("Amy", True)]
+
+    # A rebuild (adding a character re-segments the book) keeps each repeat as it was.
+    client.post(f"/api/books/{book.id}/characters", json={"name": "Evelyn", "gender": "female"})
+    assert state() == [("Dean", False), ("Amy", True)]
+
+    # Resetting the corrected repeat leaves the other one alone.
+    correct(book, [second["anchor"]], reset=True)
+    assert state() == [("Dean", False), ("Dean", False)]
 
 
 def test_correct_a_whole_quote_at_once(make_book, segments, correct):

@@ -33,3 +33,7 @@ CHARACTERS = [  # (name, gender)
     ("Carol", "female"),
     ("Dean", "male"),
 ]
+
+# The same sentence with the same sentence before it, twice: only an occurrence
+# counter tells the two "No," lines apart.
+AMBIGUOUS_REPEAT = 'Nobody spoke. "No," Dean said.\n\nNobody spoke. "No," Dean said.'
