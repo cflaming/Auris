@@ -22,7 +22,7 @@ from werkzeug.utils import secure_filename
 
 from core.database import init_db, get_conn
 from core.base_engine import SAMPLE_RATE
-from core.engine_manager import ENGINES, EngineManager
+from core.engine_manager import EngineManager
 from core import characters as char_module
 from core import enrichment, exporter, structure, settings as app_settings
 from core.enrichment import ENRICHMENT_VERSION
@@ -1770,11 +1770,15 @@ def save_settings():
         'subtitle_format', 'theme', 'font_size', 'font_family', 'line_height',
     }
     updates = {k: v for k, v in body.items() if k in allowed}
-    if 'tts_engine' in updates and updates['tts_engine'] not in ENGINES:
-        return jsonify({'error': f"Unknown TTS engine: {updates['tts_engine']}"}), 400
+    engine_switched = False
+    if 'tts_engine' in updates:
+        try:  # switch first so an invalid/unloadable engine is never persisted
+            engine_switched = tts.set_engine(updates['tts_engine'])
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
     result = app_settings.save(updates)
 
-    if 'tts_engine' in updates and tts.set_engine(updates['tts_engine']):
+    if engine_switched:
         _clear_chapter_renders()
 
     tts.apply_settings(updates)

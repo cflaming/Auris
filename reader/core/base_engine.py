@@ -7,6 +7,7 @@ generation and a sequential `generate_batch` — lives here. Engines that can
 batch natively override `generate_batch`.
 """
 
+import gc
 import logging
 import os
 import threading
@@ -63,11 +64,14 @@ class BaseEngine:
             self.close()
 
     def reload(self):
+        self._teardown()
+        self._error = None
+        self.load_async()
+
+    def _teardown(self):
         with self._lock:
             self._ready = False
-            self._error = None
             self._unload()
-        self.load_async()
 
     def close(self):
         """Permanently shut this engine down and free its model.
@@ -75,10 +79,7 @@ class BaseEngine:
         Takes the lock, so it waits for any in-flight synthesis call.
         """
         self._closed = True
-        with self._lock:
-            self._ready = False
-            self._unload()
-        import gc
+        self._teardown()
         gc.collect()
         try:
             import torch
