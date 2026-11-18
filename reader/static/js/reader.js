@@ -1832,7 +1832,6 @@ async function loadImpactPreview() {
 }
 
 function renderImpact(d) {
-  const who = n => n || 'Narrator';
   const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
   if (!d.total) {
     return `<div class="impact-head">Adding <b>${esc(d.name)}</b> would not change any other sentence.</div>`;
@@ -1844,11 +1843,11 @@ function renderImpact(d) {
     <b>${plural(d.total, 'sentence')}</b> in <b>${plural(d.chapters.length, 'chapter')}</b>.</div>`;
   if (toNew.length) {
     html += `<div class="impact-row">→ <b>${esc(d.name)}</b> gains ${d.gained}: ` +
-      toNew.map(t => `${t.count} from ${esc(who(t.from))}`).join(', ') + '</div>';
+      toNew.map(t => `${t.count} from ${esc(speakerLabel(t.from))}`).join(', ') + '</div>';
   }
   if (others.length) {
     html += `<div class="impact-row">⇄ Knock-on shifts: ` +
-      others.map(t => `${esc(who(t.from))} → ${esc(who(t.to))} <span class="impact-muted">×${t.count}</span>`).join(', ') + '</div>';
+      others.map(t => `${esc(speakerLabel(t.from))} → ${esc(speakerLabel(t.to))} <span class="impact-muted">×${t.count}</span>`).join(', ') + '</div>';
   }
   const shown = d.chapters.slice(0, 6).map(c => `${esc(c.title)} <span class="impact-muted">(${c.changed})</span>`);
   const more = d.chapters.length - shown.length;
@@ -1858,11 +1857,10 @@ function renderImpact(d) {
   const items = d.changes.map(c => {
     const heading = c.chapter_id !== lastChapter ? `<div class="diff-chapter">${esc(c.chapter_title)}</div>` : '';
     lastChapter = c.chapter_id;
-    return `${heading}<div class="diff-item">
-      ${c.prev ? `<div class="diff-ctx">${esc(c.prev)}</div>` : ''}
-      <div class="diff-text">${esc(c.text)}</div>
-      <div class="diff-line del">− ${esc(who(c.before))}</div>
-      <div class="diff-line add">+ ${esc(who(c.after))}</div></div>`;
+    return heading + excerptCard({
+      prev: c.prev, text: c.text,
+      lines: [{ kind: 'del', label: speakerLabel(c.before) }, { kind: 'add', label: speakerLabel(c.after) }],
+    });
   }).join('');
   html += `<details><summary>Show the changes</summary><div class="diff-list">${items}</div>
     ${d.truncated ? `<div class="impact-muted">Showing the first ${d.changes.length} of ${d.total}.</div>` : ''}</details>`;

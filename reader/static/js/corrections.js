@@ -2,7 +2,6 @@
 
 const BOOK = window.BOOK_ID;
 let corrections = [];
-let armed = null;          // the chapter-reset button waiting for a second click
 
 const STATUS_TEXT = {
   active: '',
@@ -38,25 +37,25 @@ function cardFor(c) {
       ? [{ kind: 'del', label: speakerLabel(c.detected_speaker) }, { kind: 'add', label: speakerLabel(c.corrected_speaker) }]
       : [{ kind: 'add', label: speakerLabel(c.corrected_speaker) }],
     meta, actions,
-    attrs: `data-search="${escapeHtml([c.text, c.detected_speaker, c.corrected_speaker, c.chapter_title].join(' ').toLowerCase())}"`,
   });
 }
 
-function render() {
-  const list = document.getElementById('corrections-list');
-  const groups = groupByChapter(corrections);
+function updateSummary() {
+  const chapters = new Set(corrections.map(c => c.chapter_id)).size;
   document.getElementById('summary').textContent = corrections.length
-    ? `${corrections.length} correction${corrections.length === 1 ? '' : 's'} in ${groups.length} chapter${groups.length === 1 ? '' : 's'}`
+    ? `${corrections.length} correction${corrections.length === 1 ? '' : 's'} in ${chapters} chapter${chapters === 1 ? '' : 's'}`
     : 'No corrections yet.';
   document.getElementById('toolbar').hidden = corrections.length === 0;
   document.getElementById('empty').hidden = corrections.length !== 0;
+}
 
+function render() {
   const collapse = corrections.length > 40;       // a long list starts collapsed
-  list.innerHTML = groups.map(g => `
+  document.getElementById('corrections-list').innerHTML = groupByChapter(corrections).map(g => `
     <details class="chapter-group" data-chapter="${g.id}" ${collapse ? '' : 'open'}>
       <summary>
         <span class="chapter-group-title">${escapeHtml(g.title)}</span>
-        <span class="excerpt-note">${g.items.length}</span>
+        <span class="excerpt-note" data-count>${g.items.length}</span>
         <span class="chapter-group-actions">
           <a class="btn btn-sm btn-ghost" href="${readerUrl(BOOK, g.id)}">Open chapter</a>
           <button class="btn btn-sm btn-ghost" data-reset-chapter="${g.id}">Reset chapter</button>
@@ -64,17 +63,22 @@ function render() {
       </summary>
       ${g.items.map(cardFor).join('')}
     </details>`).join('');
+  updateSummary();
   applyFilter();
 }
 
+// Filter on what is on screen: a card's own text, or its chapter's title.
 function applyFilter() {
   const q = document.getElementById('filter').value.trim().toLowerCase();
-  document.querySelectorAll('#corrections-list .excerpt').forEach(el => { el.hidden = !!q && !el.dataset.search.includes(q); });
-  document.querySelectorAll('#corrections-list .chapter-group').forEach(g => {
-    g.hidden = !!q && ![...g.querySelectorAll('.excerpt')].some(el => !el.hidden);
+  document.querySelectorAll('#corrections-list .chapter-group').forEach(group => {
+    const titleMatches = group.querySelector('summary').textContent.toLowerCase().includes(q);
+    const cards = [...group.querySelectorAll('.excerpt')];
+    cards.forEach(el => { el.hidden = !!q && !titleMatches && !el.textContent.toLowerCase().includes(q); });
+    group.hidden = !!q && cards.every(el => el.hidden);
   });
 }
 
+// Remove just the affected nodes, so groups the user opened or closed and the scroll position stay put.
 async function resetCorrections(chapterId, anchors) {
   const body = { chapter_id: chapterId, ...(anchors ? { anchors } : {}) };
   const r = await fetch(`/api/books/${BOOK}/corrections`, {
@@ -82,7 +86,15 @@ async function resetCorrections(chapterId, anchors) {
   });
   if (!r.ok) { document.getElementById('summary').textContent = (await r.json()).error || 'Reset failed'; return; }
   corrections = corrections.filter(c => !(c.chapter_id === chapterId && (!anchors || anchors.includes(c.anchor))));
-  render();
+
+  const group = document.querySelector(`.chapter-group[data-chapter="${chapterId}"]`);
+  if (!anchors) group.remove();
+  else {
+    anchors.forEach(a => group.querySelector(`[data-reset="${CSS.escape(a)}"]`)?.closest('.excerpt').remove());
+    const left = group.querySelectorAll('.excerpt').length;
+    if (left) group.querySelector('[data-count]').textContent = left; else group.remove();
+  }
+  updateSummary();
 }
 
 document.addEventListener('click', e => {
@@ -91,13 +103,11 @@ document.addEventListener('click', e => {
   const chapterBtn = e.target.closest('[data-reset-chapter]');
   if (chapterBtn) {
     e.preventDefault();                                   // the button sits inside <summary>
-    if (armed !== chapterBtn) {                           // two clicks, so a whole chapter isn't one slip away
-      if (armed) armed.textContent = 'Reset chapter';
-      armed = chapterBtn; chapterBtn.textContent = 'Click again to confirm';
-      setTimeout(() => { if (armed === chapterBtn) { chapterBtn.textContent = 'Reset chapter'; armed = null; } }, 6000);
+    if (!chapterBtn.dataset.armed) {                      // two clicks, so a whole chapter isn't one slip away
+      chapterBtn.dataset.armed = '1'; chapterBtn.textContent = 'Click again to confirm';
+      setTimeout(() => { delete chapterBtn.dataset.armed; chapterBtn.textContent = 'Reset chapter'; }, 6000);
       return;
     }
-    armed = null;
     resetCorrections(+chapterBtn.dataset.resetChapter, null);
   }
 });

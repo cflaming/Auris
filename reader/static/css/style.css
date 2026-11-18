@@ -738,7 +738,7 @@ body.theme-paper .voice-swatch[style] {
 .speaker-impact summary { cursor: pointer; color: var(--accent); }
 .diff-list { max-height: 15em; overflow: auto; margin-top: 6px; border: 1px solid var(--border); border-radius: 4px; }
 .diff-chapter { position: sticky; top: 0; background: var(--bg3); color: var(--text2); padding: 3px 8px; font-size: 0.72rem; }
-.diff-item { padding: 5px 8px; border-top: 1px solid var(--border); }
+.diff-list .excerpt { padding: 5px 8px; }                 /* compact inside the new-character preview */
 .diff-ctx { color: var(--text3); font-style: italic; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .diff-text { color: var(--text); font-family: var(--font-family); }
 .diff-line { font-family: 'Courier New', monospace; font-size: 0.74rem; padding: 0 6px; border-radius: 2px; }

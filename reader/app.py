@@ -4,6 +4,7 @@ Offline Ebook Reader — Flask application.
 
 import base64
 from collections import Counter, defaultdict
+from itertools import groupby
 import email.utils
 import json
 import logging
@@ -1327,23 +1328,20 @@ def _correction_context(book_id: int, chapter_id: int, rows, anchors: set) -> di
     return context
 
 
-# A correction is also a labelled example, so the detection and context captured the first time
-# stay put when the same sentence is corrected again (only the speaker and updated_at change).
-_UPSERT_CORRECTION = '''
+# A correction is also a labelled example: its detection and context are captured once, when it is
+# first made. Correcting the same sentence again only changes the speaker (see set_chapter_speakers).
+_INSERT_CORRECTION = '''
 INSERT INTO segment_speakers (book_id, chapter_id, anchor, character_name, detected_speaker, text,
                               prev_text, next_text, paragraph_text, created_at, updated_at)
 VALUES (?,?,?,?,?,?,?,?,?, datetime('now'), datetime('now'))
-ON CONFLICT(book_id, chapter_id, anchor) DO UPDATE SET
-    character_name   = excluded.character_name,
-    updated_at       = datetime('now'),
-    detected_speaker = CASE WHEN segment_speakers.text IS NULL THEN excluded.detected_speaker
-                            ELSE segment_speakers.detected_speaker END,
-    text             = COALESCE(segment_speakers.text, excluded.text),
-    prev_text        = COALESCE(segment_speakers.prev_text, excluded.prev_text),
-    next_text        = COALESCE(segment_speakers.next_text, excluded.next_text),
-    paragraph_text   = COALESCE(segment_speakers.paragraph_text, excluded.paragraph_text),
-    created_at       = COALESCE(segment_speakers.created_at, excluded.created_at)
 '''
+
+
+def _invalidate_chapter(conn, book_id: int, chapter_id: int):
+    """Drop a chapter's stored segments and renders so they rebuild on the next read (with the
+    current corrections applied); unchanged sentences come back from the WAV cache."""
+    conn.execute('DELETE FROM tts_segments WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))
+    _clear_chapter_renders(book_id, chapter_id)
 
 
 @app.route('/api/books/<int:book_id>/chapters/<int:chapter_id>/speaker', methods=['PUT'])
@@ -1378,12 +1376,18 @@ def set_chapter_speakers(book_id, chapter_id):
                 [(book_id, chapter_id, a) for a in anchors]
             )
         else:
-            context = _correction_context(book_id, chapter_id, rows, set(anchors))
-            conn.executemany(_UPSERT_CORRECTION, [(book_id, chapter_id, a, name, *context[a]) for a in anchors])
-        # Invalidate the chapter; its segments rebuild (with the corrections applied)
-        # on the next read, and unchanged sentences come back from the WAV cache.
-        conn.execute('DELETE FROM tts_segments WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))
-    _clear_chapter_renders(book_id, chapter_id)
+            have_record = {r[0] for r in conn.execute(
+                'SELECT anchor FROM segment_speakers WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))}
+            first_time = [a for a in anchors if a not in have_record]
+            if first_time:                  # detection + context are captured once, the first time
+                context = _correction_context(book_id, chapter_id, rows, set(first_time))
+                conn.executemany(_INSERT_CORRECTION,
+                                 [(book_id, chapter_id, a, name, *context[a]) for a in first_time])
+            conn.executemany(
+                "UPDATE segment_speakers SET character_name=?, updated_at=datetime('now') "
+                'WHERE book_id=? AND chapter_id=? AND anchor=?',
+                [(name, book_id, chapter_id, a) for a in anchors if a in have_record])
+        _invalidate_chapter(conn, book_id, chapter_id)
     return jsonify({'ok': True, 'updated': len(anchors)})
 
 
@@ -1416,15 +1420,11 @@ def _list_corrections(book_id: int) -> list[dict]:
     with get_conn() as conn:
         rows = conn.execute(
             'SELECT sp.*, c.title AS chapter_title FROM segment_speakers sp '
-            'JOIN chapters c ON c.id = sp.chapter_id WHERE sp.book_id=? ORDER BY c.order_num, sp.created_at',
+            'JOIN chapters c ON c.id = sp.chapter_id WHERE sp.book_id=? ORDER BY c.order_num, sp.chapter_id',
             (book_id,)).fetchall()
         known = {r['name'] for r in conn.execute('SELECT name FROM characters WHERE book_id=?', (book_id,))}
-    by_chapter = defaultdict(list)
-    for r in rows:
-        by_chapter[r['chapter_id']].append(r)
-
     out = []
-    for chapter_id, items in by_chapter.items():
+    for chapter_id, items in groupby(rows, key=lambda r: r['chapter_id']):
         current = {s['anchor']: (i, s) for i, s in enumerate(_compute_segments_for_chapter(book_id, chapter_id))}
         chapter_items = []
         for r in items:
@@ -1460,7 +1460,7 @@ def delete_corrections(book_id):
     Works for corrections whose sentence no longer exists, which the speaker route can't reach."""
     body = request.get_json(silent=True) or {}
     chapter_id, anchors = body.get('chapter_id'), body.get('anchors')
-    if not isinstance(chapter_id, int) or isinstance(chapter_id, bool):
+    if not isinstance(chapter_id, int):
         return jsonify({'error': 'chapter_id is required'}), 400
     if anchors is not None and not isinstance(anchors, list):
         return jsonify({'error': 'anchors must be a list'}), 400
@@ -1469,14 +1469,12 @@ def delete_corrections(book_id):
             deleted = conn.execute('DELETE FROM segment_speakers WHERE book_id=? AND chapter_id=?',
                                    (book_id, chapter_id)).rowcount
         else:
-            deleted = sum(conn.execute(
+            deleted = conn.executemany(
                 'DELETE FROM segment_speakers WHERE book_id=? AND chapter_id=? AND anchor=?',
-                (book_id, chapter_id, a)).rowcount for a in dict.fromkeys(anchors))
-        if deleted:
-            conn.execute('DELETE FROM tts_segments WHERE book_id=? AND chapter_id=?', (book_id, chapter_id))
-    if not deleted:
-        return jsonify({'error': 'No matching corrections'}), 404
-    _clear_chapter_renders(book_id, chapter_id)
+                [(book_id, chapter_id, a) for a in anchors]).rowcount
+        if not deleted:
+            return jsonify({'error': 'No matching corrections'}), 404
+        _invalidate_chapter(conn, book_id, chapter_id)
     return jsonify({'ok': True, 'deleted': deleted})
 
 

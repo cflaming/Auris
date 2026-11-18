@@ -10,8 +10,15 @@ from tests.helpers import by_text
 THEN_WHEN = '"Then when?"'                          # detected as Amy; paragraph: '"Then when?" Amy asked.'
 
 
-def stored(book, chapter_index=0):
-    """The corrections table rows for a book's chapter, as dicts."""
+def edit_sentence(book):
+    """Change the text under a correction made on THEN_WHEN, so its anchor no longer exists."""
+    with get_conn() as conn:
+        conn.execute("UPDATE chapters SET content=replace(content, 'Then when?', 'Whenever?') WHERE id=?",
+                     (book.chapters[0],))
+
+
+def stored(book):
+    """The corrections table rows for a book, as dicts."""
     with get_conn() as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("SELECT * FROM segment_speakers WHERE book_id=?", (book.id,)).fetchall()
@@ -101,9 +108,7 @@ def test_a_correction_to_a_deleted_character_is_listed_as_ignored(make_book, seg
 def test_a_correction_whose_sentence_is_gone_is_listed_as_missing(make_book, segments, correct, corrections):
     book = make_book()
     correct(book, [by_text(segments(book), THEN_WHEN)["anchor"]], "Dean")
-    with get_conn() as conn:                                   # the text changes under it
-        conn.execute("UPDATE chapters SET content=replace(content, 'Then when?', 'Whenever?') WHERE id=?",
-                     (book.chapters[0],))
+    edit_sentence(book)                                        # the text changes under it
     (item,) = corrections(book)
     assert item["status"] == "missing" and item["segment_index"] is None
     assert item["text"] == THEN_WHEN                           # still shows the sentence it was made on
@@ -139,8 +144,7 @@ def test_corrections_whose_sentence_is_gone_can_still_be_deleted(make_book, segm
     book = make_book()
     anchor = by_text(segments(book), THEN_WHEN)["anchor"]
     correct(book, [anchor], "Dean")
-    with get_conn() as conn:
-        conn.execute("UPDATE chapters SET content=replace(content, 'Then when?', 'Whenever?') WHERE id=?", (book.chapters[0],))
+    edit_sentence(book)
     assert correct(book, [anchor], reset=True).status_code == 404          # the speaker route can't see it any more
     assert delete(client, book, anchors=[anchor]).status_code == 200
     assert stored(book) == []
@@ -191,6 +195,7 @@ def test_the_corrections_page_and_its_link_from_voice_studio(make_book, segments
     assert client.get("/corrections/999").status_code == 404
 
     studio = lambda: client.get(f"/voice-studio/{book.id}").get_data(as_text=True)
-    assert f"/corrections/{book.id}" in studio() and "Speaker corrections (" not in studio()    # no count yet
+    before = studio()
+    assert f"/corrections/{book.id}" in before and "Speaker corrections (" not in before    # no count yet
     correct(book, [by_text(segments(book), THEN_WHEN)["anchor"]], "Dean")
     assert "Speaker corrections (1)" in studio()

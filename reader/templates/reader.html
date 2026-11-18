@@ -193,5 +193,6 @@
 {% block scripts %}
 <script>window.BOOK_ID = {{ book.id }};</script>
 <script>window.SINGLE_NARRATOR_MODE = {{ 1 if book.single_narrator_mode else 0 }};</script>
+<script src="{{ asset('js/excerpts.js') }}"></script>
 <script src="{{ asset('js/reader.js') }}"></script>
 {% endblock %}
