@@ -1779,6 +1779,9 @@ document.getElementById('preload-btn').onclick = async () => {
 document.addEventListener('keydown', e => {
   const tag = document.activeElement.tagName.toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+  // Ctrl/Cmd/Alt + a key belongs to the browser or OS (copy, find, bookmark...), not to these shortcuts.
+  // Shift alone is allowed: '?' needs it.
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
 
   switch(e.key) {
     case ' ':
@@ -1806,6 +1809,7 @@ document.addEventListener('keydown', e => {
       toggleGutter();
       break;
     case 'e': case 'E':
+      e.preventDefault();          // the dialog focuses its box on open; without this the 'e' would be typed into it
       openSpeakerEditor();
       break;
     case 'c': case 'C':
@@ -2103,6 +2107,15 @@ function moveSpeakerActive(step) {
   document.querySelector('#speaker-list li.active')?.scrollIntoView({ block: 'nearest' });
 }
 
+// Escape closes the dialog from anywhere in it (the box, the list, the new-character fields, the
+// scope choices). The reader's own key handler ignores keys typed in a field, so it is done here.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !document.getElementById('speaker-modal').classList.contains('hidden')) {
+    e.preventDefault();
+    closeSpeakerEditor();
+  }
+});
+
 (function wireSpeakerPicker() {
   const input = document.getElementById('speaker-input');
   const list = document.getElementById('speaker-list');
@@ -2117,11 +2130,6 @@ function moveSpeakerActive(step) {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (open && _speakerRows[_speakerActive]) chooseSpeakerRow(_speakerRows[_speakerActive]);
-    } else if (e.key === 'Escape' && open) {
-      e.preventDefault();
-      hideSpeakerList();
-      input.value = _speakerChoice === '__new__' ? 'New character…' : (_speakerChoice || 'Narrator');
-      _speakerTyped = false;
     }
   });
   // Pressing on a row must not take focus from the box (that would close the list before the click lands).
