@@ -1911,6 +1911,7 @@ function openSpeakerEditor(idx = currentSegIdx) {
   _speakerEditIdx = idx;
 
   _speakerChoice = seg.character_name || '';
+  _speakerPicked = false;
   resetSpeakerSearch();
 
   const n = scope => _speakerScopeIndices(idx, scope).length;
@@ -2050,6 +2051,7 @@ function onSpeakerSelectChange() {
 // is (under the head's name), and typing the merged name still finds the group.
 
 let _speakerChoice = '';        // '' = narrator, '__new__', or a character name
+let _speakerPicked = false;     // a name has been picked in this dialog (so Enter on it again applies)
 let _speakerTyped = false;      // the box holds something the user typed, so the list is filtered by it
 let _speakerRows = [];          // what the list shows
 let _speakerActive = -1;        // index in _speakerRows of the highlighted row
@@ -2157,11 +2159,14 @@ function resetSpeakerSearch() {
 
 function chooseSpeakerRow(row) {
   _speakerChoice = row.value;
+  _speakerPicked = true;
   const nameBox = document.getElementById('speaker-new-name');
   if (row.kind === 'new' && row.newName) nameBox.value = row.newName;
   resetSpeakerSearch();
   onSpeakerSelectChange();
-  if (row.kind === 'new') nameBox.focus();
+  // The search box has just been hidden, which would drop focus to the page; keep it in the dialog so
+  // typing starts a new search and Enter applies.
+  if (row.kind === 'new') nameBox.focus(); else document.getElementById('speaker-list').focus();
 }
 
 function moveSpeakerActive(step) {
@@ -2196,7 +2201,10 @@ function moveSpeakerActive(step) {
       moveSpeakerActive(e.key === 'ArrowDown' ? 1 : -1);
     } else if (e.key === 'Enter' && (inSearch || e.target === list)) {
       e.preventDefault();
-      if (_speakerRows[_speakerActive]) chooseSpeakerRow(_speakerRows[_speakerActive]);
+      const row = _speakerRows[_speakerActive];
+      // Enter picks the highlighted name; Enter again on the name you have picked applies it.
+      if (!inSearch && _speakerPicked && row && row.kind !== 'new' && row.value === _speakerChoice) applySpeaker(false);
+      else if (row) chooseSpeakerRow(row);
     }
   });
 
