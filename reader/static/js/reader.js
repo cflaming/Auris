@@ -995,6 +995,9 @@ function _onAudioError(e) {
 
 _audioA.addEventListener('ended', _onAudioEnded);
 _audioB.addEventListener('ended', _onAudioEnded);
+for (const a of [_audioA, _audioB]) {
+  a.addEventListener('timeupdate', e => { if (e.target === audio) _followTimeline(); });
+}
 _audioA.addEventListener('error', _onAudioError);
 _audioB.addEventListener('error', _onAudioError);
 
@@ -1063,6 +1066,34 @@ function stopPlayback() {
 let _wordRafId = null;
 let _progressInterval = null;
 
+// In timeline playback (MSE or the full-chapter file): move the cursor to the segment now
+// playing, and keep the next segments appended to the stream. Returns true if it moved.
+// This runs from the animation frame (for smooth highlighting) AND from the audio element's
+// own 'timeupdate'. Browsers stop animation frames while the screen is locked or blacked out;
+// when only the frame loop did this, nothing extended the stream then and the audio ran out of
+// buffered segments a minute or two after the screen went dark.
+let _timelineRetryAt = 0;
+function _followTimeline() {
+  if (!isPlaying || !(_mseOk || _fullChapterMode)) return false;
+  const t = audio.currentTime;
+  let reached = -1, firstMissing = -1;
+  for (let ni = currentSegIdx + 1; ni < chapter.segments.length; ni++) {
+    const start = _segStart[ni];
+    if (start === undefined) {
+      if (firstMissing < 0) firstMissing = ni;     // not appended yet
+      continue;
+    }
+    if (t >= start) reached = ni; else break;      // the next appended segment hasn't started yet
+  }
+  if (reached >= 0) { _onSegmentChange(reached); return true; }
+  // Waiting on a segment whose TTS wasn't ready: retry the append, but not on every update.
+  if (firstMissing >= 0 && Date.now() >= _timelineRetryAt) {
+    _timelineRetryAt = Date.now() + 2000;
+    _appendAhead(firstMissing, _mseGenId);
+  }
+  return false;
+}
+
 function startWordHighlight(segIdx, durationSec) {
   stopWordHighlight();
   _progressInterval = setInterval(() => queueProgressSave(), 30_000);
@@ -1078,30 +1109,10 @@ function startWordHighlight(segIdx, durationSec) {
 
   const n        = wordEls.length;
   const segStart = _useTimeline ? (_segStart[segIdx] ?? audio.currentTime) : audio.currentTime;
-  let   retryAt  = 0; // throttle: retry _appendAhead when next segments are missing
 
   function tick() {
     const t = audio.currentTime;
-
-    // MSE or full-chapter: detect natural transition to the next segment.
-    // Scan forward past any segments that haven't been appended yet.
-    if (_useTimeline && isPlaying) {
-      let firstMissing = -1;
-      for (let ni = segIdx + 1; ni < chapter.segments.length; ni++) {
-        const nextStart = _segStart[ni];
-        if (nextStart === undefined) {
-          if (firstMissing < 0) firstMissing = ni; // first unappended segment
-          continue;
-        }
-        if (t >= nextStart) { _onSegmentChange(ni); return; }
-        break; // next defined segment hasn't started yet
-      }
-      // If we're waiting on a segment whose TTS wasn't ready, retry the append.
-      if (firstMissing >= 0 && Date.now() >= retryAt) {
-        retryAt = Date.now() + 2000;
-        _appendAhead(firstMissing, _mseGenId);
-      }
-    }
+    if (_followTimeline()) return;       // moved to the next segment: a new tick runs for it
 
     if (durationSec && n > 0) {
       const elapsed = t - segStart;
