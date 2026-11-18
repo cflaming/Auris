@@ -543,22 +543,33 @@ function _isInBuffer(time) {
   return false;
 }
 
+// Appends are serialized through this chain. _fetchAndAppendSeg is reached from
+// several places at once (playSegment, _onSegmentChange, the RAF retry), and
+// each used to check `_segStart[idx] === undefined` *before* its fetch awaits,
+// so two callers could both append the same segment — the stream then played
+// A B B C C … and the timeline (_segStart/_segEnd) drifted a segment behind
+// the audio. Fetching stays parallel; the dedupe check + append happen in turn.
+let _appendChain = Promise.resolve(true);
+
 async function _fetchAndAppendSeg(idx, genId) {
   if (_mseGenId !== genId || !_sbReady) return false;
-  let data;
-  try { data = await fetchSegmentData(idx); }
-  catch (_) { return false; }
-  if (_mseGenId !== genId || !_sbReady) return false;
+  if (_segStart[idx] !== undefined) return true;
+  let data, buf;
+  try {
+    data = await fetchSegmentData(idx);
+    if (_mseGenId !== genId || !_sbReady) return false;
+    const resp = await fetch(`${data.audio_url}/fmp4`);
+    if (!resp.ok || _mseGenId !== genId || !_sbReady) return false;
+    buf = await resp.arrayBuffer();
+  } catch (_) { return false; }
 
-  let resp;
-  try { resp = await fetch(`${data.audio_url}/fmp4`); }
-  catch (_) { return false; }
-  if (!resp.ok || _mseGenId !== genId || !_sbReady) return false;
+  const run = () => _appendSeg(idx, genId, data, buf);
+  return (_appendChain = _appendChain.then(run, run));
+}
 
-  let buf;
-  try { buf = await resp.arrayBuffer(); }
-  catch (_) { return false; }
+async function _appendSeg(idx, genId, data, buf) {
   if (_mseGenId !== genId || !_sbReady) return false;
+  if (_segStart[idx] !== undefined) return true; // another caller appended it first
 
   _segStart[idx] = _mseNext;
   _segDurations[idx] = data.duration_sec;
