@@ -9,6 +9,11 @@ The scratch copy lives in reader/.dev. It is made from your real data the first 
 REUSED on later starts, so whatever you change while testing (corrections, settings, ...) is still
 there next time. It does not follow your real data afterwards; use --refresh to catch up.
 
+Protected: your database, settings, audio cache, uploads and exports. NOT protected, because they
+live outside the data folder: models (the default model path and any model download you trigger from
+Settings), the Hugging Face cache used by --real-engine, and the spaCy install button, which installs
+into your real Python environment.
+
 What is copied: the database (a consistent snapshot, even while the real server is running),
 settings, and the audio cache and uploads. Those two are cloned where the filesystem supports
 copy-on-write (APFS, btrfs, xfs): instant, no extra disk space until something changes, and
@@ -20,19 +25,23 @@ one writes to your real data.)
 """
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
 import sqlite3
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
+from core.layout import APP_DIR, FILES, layout, resolve_root     # pure: safe to import before the data folder is switched
+
 DEFAULT_SCRATCH = APP_DIR / ".dev"
 MARKER = ".auris-dev.json"          # present only in folders this script created
-CLONED_DIRS = ("audio_cache", "uploads")
+CLONED = ("audio_cache", "uploads")  # the layout() entries that are cloned (or copied) as folders
+PROBE_BYTES = 8 * 1024 * 1024        # large enough that a full copy is obvious in the free-space figures
 
 
 def _clone_command():
@@ -44,14 +53,19 @@ def _clone_command():
     return None
 
 
-PROBE_BYTES = 32 * 1024 * 1024       # big enough that a full copy is obvious in the free-space figures
-
-
 def _run_clone(cmd, src: Path, dst: Path) -> bool:
     return subprocess.run([*cmd, str(src), str(dst)], capture_output=True).returncode == 0
 
 
-def clone_check(prod: Path, dev: Path) -> tuple[bool, str]:
+def _digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def clone_check(prod_layout: dict, dev: Path) -> tuple[bool, str]:
     """Whether copy-on-write clones can safely be used here, and if not, why not.
 
     1. A real file from your data can be cloned into the scratch folder (same volume, filesystem support).
@@ -62,7 +76,7 @@ def clone_check(prod: Path, dev: Path) -> tuple[bool, str]:
     cmd = _clone_command()
     if not cmd:
         return False, "this platform has no copy-on-write clone command"
-    sample = next((f for name in CLONED_DIRS for f in (prod / name).rglob("*") if f.is_file()), None)
+    sample = next((f for name in CLONED for f in prod_layout[name].rglob("*") if f.is_file()), None)
     if sample is None:
         return False, "nothing to clone"
     real, a, b = dev / ".clone-probe-real", dev / ".clone-probe-a", dev / ".clone-probe-b"
@@ -70,11 +84,13 @@ def clone_check(prod: Path, dev: Path) -> tuple[bool, str]:
         if not _run_clone(cmd, sample, real):
             return False, "your data cannot be cloned into the scratch folder (different volume, or no filesystem support)"
 
-        data = os.urandom(1024 * 1024) * (PROBE_BYTES // (1024 * 1024))
+        block = os.urandom(1024 * 1024)                                    # random, so nothing can compress or dedupe it
         with open(a, "wb") as f:
-            f.write(data)
+            for _ in range(PROBE_BYTES // len(block)):
+                f.write(block)
             f.flush()
             os.fsync(f.fileno())
+        original = _digest(a)
         free_before = shutil.disk_usage(dev).free
         if not _run_clone(cmd, a, b):
             return False, "cloning a scratch file failed"
@@ -82,21 +98,23 @@ def clone_check(prod: Path, dev: Path) -> tuple[bool, str]:
 
         if b.is_symlink() or os.path.samefile(a, b):                       # checked before anything is written
             return False, "the 'clone' is the same file as the original, not a separate one"
-        if b.read_bytes() != data:
+        if _digest(b) != original:
             return False, "the clone's content differs from the original"
         if free_before - free_after > PROBE_BYTES // 2:
             return False, "cloning used real disk space, so it is a full copy and not copy-on-write"
 
-        marker = b"CLONE-WRITE-TEST"
+        marker, at = b"CLONE-WRITE-TEST", PROBE_BYTES // 2
         with open(b, "r+b") as f:                                          # write into the clone, in place
-            f.seek(len(data) // 2)
+            f.seek(at)
             f.write(marker)
             f.flush()
             os.fsync(f.fileno())
-        if a.read_bytes() != data:
+        if _digest(a) != original:
             return False, "writing to the clone changed the original"
-        if b.read_bytes()[len(data) // 2:][:len(marker)] != marker:
-            return False, "a write to the clone was lost"
+        with open(b, "rb") as f:
+            f.seek(at)
+            if f.read(len(marker)) != marker:
+                return False, "a write to the clone was lost"
         return True, ""
     finally:
         for probe in (real, a, b):
@@ -123,59 +141,58 @@ def snapshot_db(src: Path, dst: Path):
         source.close()
 
 
-def real_data_root() -> Path:
-    """Where the real data lives: AURIS_DATA_DIR if you run your real install with it set, else next to the app."""
-    return Path(os.environ.get("AURIS_DATA_DIR") or APP_DIR).expanduser().resolve()
-
-
 def check_locations(prod: Path, dev: Path):
     """The scratch folder must not be, or sit inside, any of the real data folders."""
     dev, prod = dev.resolve(), prod.resolve()
     if dev == prod:
         raise SystemExit(f"Refusing to use the real data folder ({prod}) as the scratch folder.")
-    for name in ("data", "exports", *CLONED_DIRS):
-        if dev == prod / name or (prod / name) in dev.parents:
-            raise SystemExit(f"The scratch folder {dev} is inside the real data folder {prod / name}.")
+    for name, path in layout(prod).items():
+        folder = path.parent if name in FILES else path                  # the folder holding a file, or the folder itself
+        if dev == folder or folder in dev.parents:
+            raise SystemExit(f"The scratch folder {dev} is inside the real data folder {folder}.")
 
 
-def shared_with_prod(prod: Path, dev: Path) -> list[str]:
-    """Files in the scratch folder that are really the same file as one in the real data (a symlink
-    or hardlink), so that writing to them would write to your real data. Clones and copies are fine."""
-    shared = []
-    for name in ("data", *CLONED_DIRS):
+def shared_files(dev: Path) -> list[str]:
+    """Files in the scratch copy that could be someone else's: a symlink, or a file with more than one
+    name (a hardlink, which would be the real file's second name). Clones and copies have neither, and
+    this needs only one lstat per file, with no lookups against the real data."""
+    found = []
+    for name in ("data", *CLONED):
         root = dev / name
         if root.is_symlink():
-            shared.append(str(root))
+            found.append(str(root))
             continue
-        for f in root.rglob("*"):
-            if f.is_symlink():
-                shared.append(str(f))
-            elif f.is_file():
-                twin = prod / f.relative_to(dev)
-                if twin.exists() and os.path.samefile(f, twin):
-                    shared.append(str(f))
-    return shared
+        for folder, subfolders, files in os.walk(root):
+            found += [os.path.join(folder, d) for d in subfolders if os.path.islink(os.path.join(folder, d))]
+            for f in files:
+                st = os.lstat(os.path.join(folder, f))
+                if stat.S_ISLNK(st.st_mode) or st.st_nlink > 1:
+                    found.append(os.path.join(folder, f))
+    return found
 
 
-def verify_independent(prod: Path, dev: Path):
-    shared = shared_with_prod(prod, dev)
+def verify_independent(dev: Path):
+    shared = shared_files(dev)
     if shared:
-        raise SystemExit(f"{len(shared)} file(s) in the scratch folder are the same file as your real data "
-                         f"(e.g. {shared[0]}). Not starting; run with --refresh to rebuild the copy.")
+        raise SystemExit(f"{len(shared)} file(s) in the scratch folder are linked to other files "
+                         f"(e.g. {shared[0]}), so they might be your real data. Not starting; "
+                         "run with --refresh to rebuild the copy.")
 
 
 def check_runtime_paths(scratch: Path):
-    """The app reads its data locations when it is imported. Refuse to start unless every one of
-    them really points inside the scratch folder (the last line of defence for your real data)."""
+    """The app reads its data locations when it is imported. Refuse to start unless every location
+    in core.paths, and the paths the modules actually use, are inside the scratch folder."""
     import app
     import core.base_engine
     import core.database
     import core.exporter
+    import core.paths
     import core.settings
     in_use = {
-        "database": core.database.get_db_path(), "settings": core.settings.SETTINGS_FILE,
-        "audio cache": core.base_engine.AUDIO_CACHE_DIR, "uploads": app.UPLOAD_DIR,
-        "exports": core.exporter.EXPORTS_DIR, "chapter renders": app._CHAPTER_RENDER_DIR,
+        **{f"paths.{name}": path for name, path in core.paths.LOCATIONS.items()},    # a new location can't be missed
+        "database in use": core.database.get_db_path(), "settings in use": core.settings.SETTINGS_FILE,
+        "audio cache in use": core.base_engine.AUDIO_CACHE_DIR, "uploads in use": app.UPLOAD_DIR,
+        "exports in use": core.exporter.EXPORTS_DIR, "chapter renders in use": app._CHAPTER_RENDER_DIR,
     }
     outside = {name: str(path) for name, path in in_use.items() if scratch.resolve() not in Path(path).resolve().parents}
     if outside:
@@ -190,39 +207,33 @@ def build_scratch(prod: Path, dev: Path, force_copy: bool = False) -> dict:
         if not (dev / MARKER).exists():
             raise SystemExit(f"{dev} exists and was not created by dev_server.py; not touching it.")
         shutil.rmtree(dev)
-    (dev / "data").mkdir(parents=True)
-    (dev / "exports").mkdir()
+    real, scratch = layout(prod), layout(dev)
+    for name, path in scratch.items():
+        (path.parent if name in FILES else path).mkdir(parents=True, exist_ok=True)
 
-    if (prod / "data" / "reader.db").exists():
-        snapshot_db(prod / "data" / "reader.db", dev / "data" / "reader.db")
-        with sqlite3.connect(dev / "data" / "reader.db") as conn:
+    if real["database"].exists():
+        snapshot_db(real["database"], scratch["database"])
+        with sqlite3.connect(scratch["database"]) as conn:
             if (result := conn.execute("PRAGMA quick_check").fetchone()[0]) != "ok":
                 raise SystemExit(f"The copied database failed its integrity check: {result}")
-    if (prod / "data" / "settings.json").exists():
-        shutil.copy2(prod / "data" / "settings.json", dev / "data" / "settings.json")
+    if real["settings"].exists():
+        shutil.copy2(real["settings"], scratch["settings"])
 
-    clone, why_not = (False, "") if force_copy else clone_check(prod, dev)
-    modes = {}
-    for name in CLONED_DIRS:
-        if (prod / name).is_dir():
-            modes[name] = copy_dir(prod / name, dev / name, clone)
-        else:
-            (dev / name).mkdir()
-    info = {"created_at": time.time(), "source": str(prod), "modes": modes}
-    if why_not and "nothing to clone" not in why_not:
-        info["clone_note"] = why_not                  # shown at startup: why this is a plain copy
+    clone, why_not = (False, "") if force_copy else clone_check(real, dev)
+    modes = {name: copy_dir(real[name], scratch[name], clone) for name in CLONED if real[name].is_dir()}
+    info = {"created_at": time.time(), "modes": modes}
+    if why_not and why_not != "nothing to clone":
+        info["clone_note"] = why_not                  # explains why THIS copy is a plain copy
     (dev / MARKER).write_text(json.dumps(info))
     return info
 
 
-def ensure_scratch(prod: Path, dev: Path, refresh: bool = False, force_copy: bool = False) -> tuple[dict, bool]:
-    """The scratch folder's info, and whether it was (re)built just now. An existing one is reused.
-    Either way it is checked to be independent of the real data before it is handed back."""
-    check_locations(prod, dev)
-    built = refresh or not (dev / MARKER).exists()
-    info = build_scratch(prod, dev, force_copy) if built else json.loads((dev / MARKER).read_text())
-    verify_independent(prod, dev)
-    return info, built
+def ensure_scratch(prod: Path, dev: Path, refresh: bool = False, force_copy: bool = False) -> dict:
+    """The scratch folder's info. An existing copy is reused; either way it is checked to be
+    independent of the real data before it is handed back."""
+    info = build_scratch(prod, dev, force_copy) if refresh or not (dev / MARKER).exists() else json.loads((dev / MARKER).read_text())
+    verify_independent(dev)
+    return info
 
 
 def _age(seconds: float) -> str:
@@ -230,7 +241,7 @@ def _age(seconds: float) -> str:
         if seconds >= size:
             n = int(seconds // size)
             return f"{n} {unit}{'' if n == 1 else 's'}"
-    return "moments"
+    return "under a minute"
 
 
 def main():
@@ -242,8 +253,8 @@ def main():
     parser.add_argument("--dir", type=Path, default=DEFAULT_SCRATCH, help=f"scratch folder (default: {DEFAULT_SCRATCH})")
     args = parser.parse_args()
 
-    prod, scratch = real_data_root(), args.dir.resolve()      # read before AURIS_DATA_DIR is pointed at the scratch folder
-    info, built = ensure_scratch(prod, scratch, refresh=args.refresh)
+    prod, scratch = resolve_root(), args.dir.resolve()        # read before AURIS_DATA_DIR is pointed at the scratch folder
+    info = ensure_scratch(prod, scratch, refresh=args.refresh)
 
     os.environ["AURIS_DATA_DIR"] = str(scratch)      # before anything from core/ or app is imported
     sys.path.insert(0, str(APP_DIR))
@@ -251,29 +262,18 @@ def main():
     check_runtime_paths(scratch)
 
     if not args.real_engine:
-        real = app.tts
-
-        class StubEngine:
-            """Reports not-ready and never generates. Its cache tag matches the real engine's, so audio
-            already in the (copied) cache still counts as current."""
-            engine_name, cache_tag = real.engine_name, real.cache_tag
-            def load_async(self): pass
-            def status(self): return {"state": "loading", "message": "dev server: TTS disabled (--real-engine to enable)"}
-            def apply_settings(self, updates): pass
-            def set_engine(self, name): return False
-            def close(self): pass
-
-        app.tts = StubEngine()
+        from core.null_engine import NullEngine
+        app.tts = NullEngine(app.tts.engine_name, app.tts.cache_tag, state="loading",   # same cache tag: copied audio stays current
+                             message="dev server: TTS disabled (--real-engine to enable)")
 
     how = ", ".join(f"{k}: {v}" for k, v in info["modes"].items()) or "nothing to copy"
     print(f"\n  Auris dev server  ->  http://{args.host}:{args.port}")
     print(f"  Scratch data : {scratch}")
-    print(f"  {'Copied just now' if built else 'Reusing the copy made ' + _age(time.time() - info['created_at']) + ' ago'}"
-          f" from {info['source']} ({how})")
+    print(f"  Copy of your data made {_age(time.time() - info['created_at'])} ago ({how})")
     if info.get("clone_note"):
         print(f"  Note         : plain copy, not clones ({info['clone_note']})")
     print(f"  TTS          : {'real engine' if args.real_engine else 'disabled (nothing is generated)'}")
-    print("  Your real data is not touched. --refresh copies it again.\n")
+    print("  Your database, settings, audio, uploads and exports are not touched. --refresh copies them again.\n")
     app.app.run(host=args.host, port=args.port, threaded=True, use_reloader=False)
 
 

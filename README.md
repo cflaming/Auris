@@ -116,10 +116,17 @@ later starts, so what you change there is still there next time; it does not fol
 data afterwards, so use `--refresh` to catch up. The database is snapshotted safely even while
 the real server is running; the audio cache and uploads are copy-on-write clones where the
 filesystem supports it (APFS, btrfs, xfs), so they are instant and take no extra space, and plain
-copies elsewhere. Nothing done in the scratch copy can change your real files, and it checks that
-before starting: the scratch folder must not be inside your real data, no file in it may be the same
-file as a real one (a hardlink or symlink), and the app must report that every data path (database,
-settings, audio cache, uploads, exports, renders) is inside it. If any check fails it refuses to start.
+copies elsewhere. Before cloning, a self-test on throwaway files proves a clone really is
+copy-on-write (a separate file, no real disk space used, and writing to it leaves the original alone).
+
+Your database, settings, audio cache, uploads and exports can't be changed from the scratch copy,
+and it checks that before starting: the scratch folder must not be inside your real data, no file
+in it may be a symlink or hardlink, and every data location the app uses must be inside it. If any
+check fails it refuses to start.
+
+What it does **not** protect is anything outside the data folder: the TTS model (a model download
+started from Settings writes to the model path), the Hugging Face cache used by `--real-engine`,
+and the spaCy install button, which installs into your real Python environment.
 
 Under the hood this is the `AURIS_DATA_DIR` environment variable, which moves the database,
 settings, audio cache, uploads and exports under another folder with the same layout.

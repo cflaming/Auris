@@ -13,7 +13,7 @@ from pathlib import Path
 from core import paths
 
 # reader/ directory
-_APP_DIR   = Path(__file__).resolve().parent.parent
+_APP_DIR   = paths.APP_DIR
 # E:\Ebook-Reader\ (or equivalent on other platforms)
 _REPO_ROOT = _APP_DIR.parent
 

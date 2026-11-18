@@ -9,19 +9,13 @@ from types import SimpleNamespace
 import pytest
 
 from core.characters import generate_voice_profile
+from core.null_engine import NullEngine
 from tests.demo_story import CHAPTER_ONE, CHAPTER_TWO, CHARACTERS
 
 
-class FakeEngine:
+def FakeEngine():
     """Stands in for EngineManager: same surface the app uses, no model."""
-    engine_name = "fake"
-    cache_tag = "fake:1"
-
-    def load_async(self): pass
-    def status(self): return {"state": "ready"}
-    def apply_settings(self, updates): pass
-    def set_engine(self, name): return False
-    def close(self): pass
+    return NullEngine("fake", "fake:1", state="ready")
 
 
 @pytest.fixture

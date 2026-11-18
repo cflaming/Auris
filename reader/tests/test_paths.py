@@ -1,14 +1,10 @@
 """AURIS_DATA_DIR relocates every place the app keeps data; unset, nothing moves."""
 
 import json
-import os
-import subprocess
-import sys
 from pathlib import Path
 
-from core import paths
-
-APP_DIR = Path(paths.APP_DIR)
+from core.layout import APP_DIR
+from tests.helpers import run_in_app
 
 SCRIPT = """
 import json
@@ -23,10 +19,8 @@ print(json.dumps({
 
 def resolved_paths(data_dir=None):
     """Where a fresh Python process (which reads the variable at import) puts everything."""
-    env = {k: v for k, v in os.environ.items() if k != "AURIS_DATA_DIR"}
-    if data_dir:
-        env["AURIS_DATA_DIR"] = str(data_dir)
-    out = subprocess.run([sys.executable, "-c", SCRIPT], cwd=APP_DIR, env=env, capture_output=True, text=True, check=True)
+    out = run_in_app(SCRIPT, data_dir)
+    assert out.returncode == 0, out.stderr
     return {k: Path(v).resolve() for k, v in json.loads(out.stdout.splitlines()[-1]).items()}
 
 
