@@ -6,14 +6,9 @@ let chapters        = [];
 // Everything that belongs to the chapter being read. openChapter replaces the whole object, so
 // anything that captured the previous chapter (an in-flight request, the buffer loop) keeps
 // working on that one and can never write into the new chapter.
-//   id        the chapter's id
-//   segments  the stored segment list (see /api/tts/segments)
-//   cache     segIdx -> Promise<{audio_url, duration_sec, text, ...}>: the single source of truth
-//             for "this segment's audio is ready or being generated". Seeded from the segment list
-//             when the chapter opens (_seedAudioCache), filled as segments are generated
-//             (fetchSegmentData), emptied for audio that proves unusable (_forgetAudio). A segment
-//             absent from it still needs a request.
-//   durations segIdx -> duration_sec (accumulated as segments play)
+//   id, segments (see /api/tts/segments), durations (segIdx -> seconds)
+//   cache  segIdx -> Promise<{audio_url, duration_sec, ...}>: the single source of truth for "this
+//          segment's audio is ready or being generated" (see _seedAudioCache, fetchSegmentData)
 let chapter = { id: null, segments: [], cache: new Map(), durations: {} };
 let currentSegIdx   = 0;
 let isPlaying       = false;
@@ -264,7 +259,8 @@ async function openChapter(chapterId, options = {}) {
   stopPlayback();
   // A fresh object: nothing from the previous chapter can leak into this one, and its
   // stale segments can't be played while this one loads.
-  const mine = chapter = { id: chapterId, segments: [], cache: new Map(), durations: {} };
+  const ch = { id: chapterId, segments: [], cache: new Map(), durations: {} };
+  chapter = ch;
   currentSegIdx    = 0;
 
   document.querySelectorAll('.toc-item').forEach(el => {
@@ -273,19 +269,19 @@ async function openChapter(chapterId, options = {}) {
   document.querySelector('.toc-item.active')
     ?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
-  const ch = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
-  if (chapter !== mine) return;      // a newer open superseded this one: don't overwrite it
-  document.getElementById('chapter-title').textContent = ch.title;
+  const meta = await fetch(`/api/books/${BOOK_ID}/chapters/${chapterId}`).then(r => r.json());
+  if (chapter !== ch) return;      // a newer open superseded this one: don't overwrite it
+  document.getElementById('chapter-title').textContent = meta.title;
   initMediaSession();
 
   const wpm = 250;
-  const minutes = Math.round((ch.word_count || 0) / wpm);
+  const minutes = Math.round((meta.word_count || 0) / wpm);
   const estText = minutes > 0 ? `~${minutes} min read` : '';
   const estEl = document.getElementById('reading-estimate');
   if (estEl) estEl.textContent = estText;
 
   if (_mobileChapterHeader) {
-    _mobileChapterHeader.innerHTML = `<span class="chapter-title-bar">${esc(ch.title)}</span>${minutes > 0 ? `<span class="reading-estimate">${estText}</span>` : ''}`;
+    _mobileChapterHeader.innerHTML = `<span class="chapter-title-bar">${esc(meta.title)}</span>${minutes > 0 ? `<span class="reading-estimate">${estText}</span>` : ''}`;
     _mobileChapterHeader.classList.remove('hidden');
   }
 
@@ -293,13 +289,13 @@ async function openChapter(chapterId, options = {}) {
     fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
     fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
   ]);
-  if (chapter !== mine) return;
-  chapter.segments = segs;
+  if (chapter !== ch) return;
+  ch.segments = segs;
   _seedAudioCache(segs);
   // Pre-populate durations from API data so resume-offset calculation is accurate
-  segs.forEach((s, i) => { if (s.duration_sec) chapter.durations[i] = s.duration_sec; });
+  segs.forEach((s, i) => { if (s.duration_sec) ch.durations[i] = s.duration_sec; });
   charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
-  renderContent(chapter.segments);
+  renderContent(segs);
 
   document.getElementById('chapter-content').scrollTop = 0;
   window.scrollTo(0, 0);
@@ -413,22 +409,22 @@ const _bufferIdle = () => new Promise(resolve => { _bufferWake = resolve; });
 
 async function _startBackgroundBuffer() {
   const myId = ++_bufferGenId;
-  const mine = chapter;
+  const ch = chapter;
   _kickBuffer();                                       // let a previous chapter's loop notice and exit
 
-  while (_bufferGenId === myId && chapter === mine) {
+  while (_bufferGenId === myId && chapter === ch) {
     // Look for work and go to sleep in the same step, so a wake-up can never slip in between.
     let next = -1;
     if (!isPlaying && !document.hidden) {              // while playing, playback preloads its own segments
-      const end = Math.min(mine.segments.length, currentSegIdx + BUFFER_AHEAD + 1);
+      const end = Math.min(ch.segments.length, currentSegIdx + BUFFER_AHEAD + 1);
       for (let i = currentSegIdx; i < end; i++) {
-        if (!mine.cache.has(i)) { next = i; break; }
+        if (!ch.cache.has(i)) { next = i; break; }
       }
     }
     if (next < 0) { await _bufferIdle(); continue; }
 
     try {
-      await fetchSegmentData(next, mine);
+      await fetchSegmentData(next, ch);
       await sleep(100);                                // let the event loop breathe between generations
     } catch (_) {
       await sleep(BUFFER_RETRY_MS);                    // e.g. the model is still loading: don't hammer it
@@ -623,19 +619,20 @@ function _onSegmentChange(idx) {
 
 async function _schedulePreload(playingIdx) {
   if (!isPlaying) return;
+  const ch = chapter;                  // a chapter switch while we wait must not receive this audio
   const nextIdx = playingIdx + 1;
-  if (nextIdx >= chapter.segments.length) return;
+  if (nextIdx >= ch.segments.length) return;
 
   // Fire N+1 first then N+2 so they arrive at the server TTS lock in the
   // correct order (N+1 queued before N+2).  Two-deep pipeline means a slow
   // TTS generation for N+1 overlaps with N-1's remaining play time *and*
   // N's full play time rather than just N's play time.
-  fetchSegmentData(nextIdx);
-  if (nextIdx + 1 < chapter.segments.length) fetchSegmentData(nextIdx + 1);
+  fetchSegmentData(nextIdx, ch);
+  if (nextIdx + 1 < ch.segments.length) fetchSegmentData(nextIdx + 1, ch);
 
   try {
-    const data = await fetchSegmentData(nextIdx);
-    if (!isPlaying) return;
+    const data = await fetchSegmentData(nextIdx, ch);
+    if (!isPlaying || chapter !== ch) return;
 
     if (_preloadIdx !== nextIdx) {
       const sb = _standby();
@@ -654,10 +651,11 @@ async function _schedulePreload(playingIdx) {
 // segment mode while the prerender continues in the background.
 async function _playSegmentChapterMode(idx, gen) {
   const charEl    = document.getElementById('pb-character');
-  const charLabel = chapter.segments[idx]?.character_name || 'Narrator';
+  const ch = chapter;
+  const charLabel = ch.segments[idx]?.character_name || 'Narrator';
 
-  if (_chapterAudioChId !== chapter.id) {
-    const chId = chapter.id;
+  if (_chapterAudioChId !== ch.id) {
+    const chId = ch.id;
 
     // Only POST once per chapter — avoid spawning a new GPU job on every segment
     // while falling back to WAV during the prerender.
@@ -686,7 +684,7 @@ async function _playSegmentChapterMode(idx, gen) {
     // Incomplete cache plays a truncated chapter and stalls the highlight.
     // Fall back to WAV segments and let the user ↺ regenerate.
     if (data.total_segments !== undefined && data.timeline.length < data.total_segments) {
-      console.warn(`Prerender incomplete: ${data.timeline.length}/${data.total_segments} chapter.segments. Falling back to WAV.`);
+      console.warn(`Prerender incomplete: ${data.timeline.length}/${data.total_segments} segments. Falling back to WAV.`);
       _chapterPrerenderChId = chId; // don't re-POST
       return false;
     }
@@ -697,7 +695,7 @@ async function _playSegmentChapterMode(idx, gen) {
     for (const { idx: i, t_start, t_end } of data.timeline) {
       _segStart[i]     = t_start;
       _segEnd[i]       = t_end;
-      chapter.durations[i] = t_end - t_start;
+      ch.durations[i] = t_end - t_start;
     }
 
     // Silence the standby element so a leftover preloaded WAV segment doesn't
@@ -710,7 +708,7 @@ async function _playSegmentChapterMode(idx, gen) {
 
     audio.src = data.audio_url;
     audio.playbackRate = speedMultiplier;
-    _chapterAudioChId = chapter.id;
+    _chapterAudioChId = chId;
     _preloadNextChapter();
   }
 
@@ -879,8 +877,9 @@ async function _advanceChapter() {
     // Keep audio.src and media session alive across the chapter gap so the OS
     // lock-screen notification doesn't disappear during the API fetches.
     _autoAdvancing = true;
+    const nextId = chapters[idx + 1].id;
     try {
-      await openChapter(chapters[idx + 1].id, { resumePosition: 0, persistOpened: true });
+      await openChapter(nextId, { resumePosition: 0, persistOpened: true });
     } finally {
       _autoAdvancing = false;
     }
@@ -892,7 +891,7 @@ async function _advanceChapter() {
       if ('mediaSession' in navigator) {
         try { navigator.mediaSession.setPositionState({}); } catch (_) {}
       }
-    } else {
+    } else if (chapter.id === nextId) {          // not if a newer open replaced it meanwhile
       playSegment(0);
     }
   } else {
