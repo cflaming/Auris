@@ -57,4 +57,3 @@ def test_asset_urls_are_versioned_by_mtime(app_module):
     url = app_module.asset("css/style.css")
     assert url.startswith("/static/css/style.css?v=") and not url.endswith("?v=0")
     assert app_module.asset("css/missing.css").endswith("?v=0")
-

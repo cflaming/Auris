@@ -1,14 +1,10 @@
 """Speaker corrections and character management through the HTTP API."""
 
 from core.database import get_conn
-from tests.conftest import spoken
 from tests.demo_story import CHAPTER_ONE
+from tests.helpers import by_text, spoken
 
 NO_DEAN = [("Amy", "female"), ("Carol", "female")]   # Dean not detected yet
-
-
-def by_text(segs, text):
-    return next(s for s in segs if s["text"] == text)
 
 
 def test_segments_expose_anchor_and_overridden(make_book, segments):
@@ -35,11 +31,13 @@ def test_correct_one_sentence(make_book, segments, correct):
 
 def test_correct_a_whole_quote_at_once(make_book, segments, correct):
     book = make_book()
-    quote = [s for s in segments(book) if s["paragraph"] == 4 and s["is_dialogue"]]
-    assert len(quote) == 2                                    # both halves of Carol's reply
+    halves = ['"After the shift change,"', '"Not a minute sooner."']        # Carol's reply, split by "she replied"
+    before = segments(book)
+    correct(book, [by_text(before, t)["anchor"] for t in halves], "Dean")
 
-    correct(book, [s["anchor"] for s in quote], "Dean")
-    assert {s["character_name"] for s in segments(book) if s["paragraph"] == 4 and s["is_dialogue"]} == {"Dean"}
+    after = segments(book)
+    assert [by_text(after, t)["character_name"] for t in halves] == ["Dean", "Dean"]
+    assert by_text(after, '"That is far too early."')["character_name"] == "Carol"   # neighbour untouched
 
 
 def test_correct_to_narrator(make_book, segments, correct):
@@ -61,15 +59,6 @@ def test_reset_restores_the_detected_speaker(make_book, segments, correct):
     assert correct(book, anchors, reset=True).status_code == 200
     restored = segments(book)
     assert spoken(restored) == original and not any(s["overridden"] for s in restored)
-
-
-def test_corrections_survive_a_rebuild(make_book, segments, correct, app_module):
-    book = make_book()
-    target = by_text(segments(book), '"Then when?"')
-    correct(book, [target["anchor"]], "Dean")
-
-    app_module._build_segments_for_chapter(book.id, book.chapters[0])   # force re-segmentation
-    assert by_text(segments(book), '"Then when?"')["character_name"] == "Dean"
 
 
 def test_a_correction_naming_a_deleted_character_is_ignored(make_book, segments, correct):

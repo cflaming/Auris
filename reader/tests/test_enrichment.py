@@ -2,8 +2,12 @@
 
 from core import enrichment
 from core.characters import generate_voice_profile
-from tests.conftest import spoken
 from tests.demo_story import CHAPTER_ONE, CHAPTER_TWO, CHARACTERS
+from tests.helpers import by_text, spoken
+
+REPEATED_NO = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
+WE_SHOULD_LEAVE = '"We should leave before dawn,"'          # Amy
+AFTER_THE_SHIFT = '"After the shift change,"'              # Carol ("she replied")
 
 
 def character_map(characters=CHARACTERS, aliases=None):
@@ -16,18 +20,20 @@ def character_map(characters=CHARACTERS, aliases=None):
     return cmap
 
 
-def enrich(text=CHAPTER_ONE, overrides=None, **kwargs):
-    return enrichment.enrich_chapter(text, kwargs.pop("cmap", character_map()),
-                                     speaker_overrides=overrides, **kwargs)
+CMAP = character_map()
+
+
+def enrich(text=CHAPTER_ONE, overrides=None, cmap=None, **kwargs):
+    return enrichment.enrich_chapter(text, cmap or CMAP, speaker_overrides=overrides, **kwargs)
 
 
 def test_detects_speakers_in_the_demo_story():
     assert spoken(enrich()) == [
-        ('"We should leave before dawn,"', "Amy"),
+        (WE_SHOULD_LEAVE, "Amy"),
         ('"The patrol changes at six."', "Amy"),
         ('"That is far too early."', "Carol"),
         ('"Then when?"', "Amy"),
-        ('"After the shift change,"', "Carol"),   # pronoun "she replied": Carol, not Amy
+        (AFTER_THE_SHIFT, "Carol"),                      # pronoun "she replied": Carol, not Amy
         ('"Not a minute sooner."', "Carol"),
         ('"No."', "Dean"),
         ('"No. We stay put."', "Dean"),
@@ -56,61 +62,59 @@ def test_anchors_are_unique_and_stable():
 
 
 def test_identical_sentences_get_distinct_anchors():
-    text = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
-    segs = [s for s in enrich(text) if s["text"] == '"No,"']
+    segs = [s for s in enrich(REPEATED_NO) if s["text"] == '"No,"']
     assert len(segs) == 2 and segs[0]["anchor"] != segs[1]["anchor"]
     assert [s["character_name"] for s in segs] == ["Dean", "Carol"]
 
 
 def test_correcting_one_repeated_sentence_leaves_the_other_alone():
-    text = 'Dean frowned. "No," Dean said.\n\nCarol laughed. "No," Carol said.'
-    first = next(s for s in enrich(text) if s["text"] == '"No,"')
-    fixed = [s for s in enrich(text, {first["anchor"]: "Amy"}) if s["text"] == '"No,"']
+    first = next(s for s in enrich(REPEATED_NO) if s["text"] == '"No,"')
+    fixed = [s for s in enrich(REPEATED_NO, {first["anchor"]: "Amy"}) if s["text"] == '"No,"']
     assert [s["character_name"] for s in fixed] == ["Amy", "Carol"]
 
 
 def test_override_changes_speaker_and_voice_only_for_that_sentence():
     before = enrich()
-    target = before[1]                                   # '"We should leave…"' (Amy)
-    after = enrich(overrides={target["anchor"]: "Dean"})
+    anchor = by_text(before, WE_SHOULD_LEAVE)["anchor"]
+    after = enrich(overrides={anchor: "Dean"})
 
-    assert after[1]["character_name"] == "Dean" and after[1]["overridden"]
-    assert after[1]["instruct"] == character_map()["Dean"]["instruct"]
-    unchanged = [(a, b) for i, (a, b) in enumerate(zip(before, after)) if i != 1]
-    assert all(a["character_name"] == b["character_name"] and not b["overridden"] for a, b in unchanged)
+    fixed = by_text(after, WE_SHOULD_LEAVE)
+    assert fixed["character_name"] == "Dean" and fixed["overridden"]
+    assert fixed["instruct"] == CMAP["Dean"]["instruct"]
+    others = [(a, b) for a, b in zip(before, after) if a["anchor"] != anchor]
+    assert all(a["character_name"] == b["character_name"] and not b["overridden"] for a, b in others)
 
 
 def test_override_to_narrator():
-    target = enrich()[1]
-    fixed = enrich(overrides={target["anchor"]: None})[1]
-    assert fixed["character_name"] is None and fixed["overridden"]
+    anchor = by_text(enrich(), WE_SHOULD_LEAVE)["anchor"]
+    fixed = by_text(enrich(overrides={anchor: None}), WE_SHOULD_LEAVE)
     narration = next(s for s in enrich() if not s["is_dialogue"])
+    assert fixed["character_name"] is None and fixed["overridden"]
     assert fixed["instruct"] == narration["instruct"]          # narrator voice
 
 
 def test_override_naming_a_missing_character_is_ignored():
-    target = enrich()[1]
-    ignored = enrich(overrides={target["anchor"]: "Ghost"})[1]
+    anchor = by_text(enrich(), WE_SHOULD_LEAVE)["anchor"]
+    ignored = by_text(enrich(overrides={anchor: "Ghost"}), WE_SHOULD_LEAVE)
     assert ignored["character_name"] == "Amy" and not ignored["overridden"]
 
 
 def test_override_to_a_merged_alias_uses_the_canonical_character():
     cmap = character_map(aliases={"Mandy": "Amy"})
-    target = enrich(cmap=cmap)[8]                        # '"After the shift change,"' (Carol)
-    fixed = enrich(cmap=cmap, overrides={target["anchor"]: "Mandy"})[8]
+    anchor = by_text(enrich(cmap=cmap), AFTER_THE_SHIFT)["anchor"]      # detected as Carol
+    fixed = by_text(enrich(cmap=cmap, overrides={anchor: "Mandy"}), AFTER_THE_SHIFT)
     assert fixed["character_name"] == "Amy"
 
 
 def test_single_narrator_mode_ignores_overrides():
-    target = enrich()[1]
-    segs = enrich(overrides={target["anchor"]: "Dean"}, single_narrator_mode=True)
+    anchor = by_text(enrich(), WE_SHOULD_LEAVE)["anchor"]
+    segs = enrich(overrides={anchor: "Dean"}, single_narrator_mode=True)
     assert all(s["character_name"] is None and not s["overridden"] for s in segs)
 
 
 def test_adding_a_character_changes_detection():
     without_dean = enrich(cmap=character_map([("Amy", "female"), ("Carol", "female")]))
-    with_dean = enrich()
     no_lines = {'"No."', '"No. We stay put."'}
     speakers = lambda segs: [s["character_name"] for s in segs if s["text"] in no_lines]
     assert "Dean" not in speakers(without_dean)
-    assert speakers(with_dean) == ["Dean", "Dean"]
+    assert speakers(enrich()) == ["Dean", "Dean"]

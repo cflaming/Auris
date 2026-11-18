@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import os
 from contextlib import contextmanager
@@ -176,19 +177,23 @@ def init_db():
     _drop_cache_key_unique()
 
 
+def _cache_key_is_unique(conn) -> bool:
+    """True if tts_segments has a UNIQUE index covering cache_key (legacy schema)."""
+    for idx in conn.execute("PRAGMA index_list(tts_segments)").fetchall():
+        if idx["unique"] and any(c["name"] == "cache_key"
+                                 for c in conn.execute(f"PRAGMA index_info({idx['name']})")):
+            return True
+    return False
+
+
 def _drop_cache_key_unique():
     """Older databases created tts_segments.cache_key as UNIQUE, so identical sentences
     in different chapters collided. Rebuild such a table without the constraint,
     copying columns by name so it works whatever columns the old table has."""
-    import logging
-    import sqlite3
     conn = sqlite3.connect(get_db_path(), isolation_level=None)  # manual transaction
     conn.row_factory = sqlite3.Row
     try:
-        row = conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='tts_segments'"
-        ).fetchone()
-        if not row or "UNIQUE" not in (row["sql"] or "").upper():
+        if not _cache_key_is_unique(conn):
             return
         old_cols = [r["name"] for r in conn.execute("PRAGMA table_info(tts_segments)")]
         conn.execute("PRAGMA foreign_keys=OFF")

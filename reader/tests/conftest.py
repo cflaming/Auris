@@ -95,7 +95,3 @@ def correct(client):
         )
     return _put
 
-
-def spoken(segs):
-    """[(text, speaker)] for the spoken (dialogue) segments."""
-    return [(s["text"], s["character_name"]) for s in segs if s["is_dialogue"]]
