@@ -641,6 +641,7 @@ function _isInBuffer(time) {
 // A B B C C … and the timeline (_segStart/_segEnd) drifted a segment behind
 // the audio. Fetching stays parallel; the dedupe check + append happen in turn.
 let _appendChain = Promise.resolve(true);
+let _lastAppendError = '';        // why the last append failed, for the message when playback can't start
 
 async function _fetchAndAppendSeg(idx, genId) {
   if (_mseGenId !== genId || !_sbReady) return false;
@@ -652,9 +653,9 @@ async function _fetchAndAppendSeg(idx, genId) {
     if (_mseGenId !== genId || !_sbReady) return false;
     const resp = await fetch(`${data.audio_url}/fmp4`);
     if (_mseGenId !== genId || !_sbReady) return false;
-    if (!resp.ok) { _forgetAudio(idx, ch); return false; }   // e.g. the file was deleted: re-request next time
+    if (!resp.ok) { _forgetAudio(idx, ch); _lastAppendError = `audio HTTP ${resp.status}`; return false; }   // e.g. the file was deleted: re-request next time
     buf = await resp.arrayBuffer();
-  } catch (_) { return false; }
+  } catch (e) { _lastAppendError = e.message; return false; }
 
   const run = () => _appendSeg(idx, genId, data, buf, ch);
   return (_appendChain = _appendChain.then(run, run));
@@ -669,7 +670,7 @@ async function _appendSeg(idx, genId, data, buf, ch) {
   ch.durations[idx] = data.duration_sec;
 
   try { await _sbAppend(buf); }
-  catch (_) { delete _segStart[idx]; return false; }
+  catch (e) { delete _segStart[idx]; _lastAppendError = e.message || 'could not append audio'; return false; }
 
   const actualEnd = _sb?.buffered.length > 0
     ? _sb.buffered.end(_sb.buffered.length - 1)
@@ -883,7 +884,13 @@ async function playSegment(idx) {
           : -1;
         for (let i = last + 1; i <= idx; i++) {
           if (gen !== _playGen || !isPlaying) return;
-          if (!await _fetchAndAppendSeg(i, genId)) { stopPlayback(); return; }
+          // One retry: a request that failed a moment ago (audio still being written, a busy server) usually works now.
+          if (!await _fetchAndAppendSeg(i, genId) && gen === _playGen && isPlaying && !await _fetchAndAppendSeg(i, genId)) {
+            if (gen !== _playGen) return;
+            stopPlayback();
+            charEl.textContent = `⚠ Couldn't load audio (${_lastAppendError || 'unknown'}). Press play to retry.`;
+            return;
+          }
         }
       }
 
