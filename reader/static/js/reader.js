@@ -1541,18 +1541,30 @@ document.getElementById('pb-seek-bar').onclick = (e) => {
   else setCurrentSegment(targetIdx, { highlight: true, save: true });
 };
 
-document.getElementById('speed-slider').oninput = function() {
-  speedMultiplier = parseFloat(this.value);
+// The speed slider is a stepped index into SPEED_VALUES, not a raw number: 0.1 steps up to 2x, then
+// 0.25 steps up to 3x. Each notch is one speed, so there is nothing to snap while dragging (snapping a
+// thumb under the pointer made it jump around where the step size changes) and arrow keys just work.
+const SPEED_VALUES = [...Array(16).keys()].map(i => Math.round((0.5 + i / 10) * 10) / 10).concat([2.25, 2.5, 2.75, 3.0]);
+
+function snapSpeed(v) {                          // nearest available speed
+  return SPEED_VALUES.reduce((best, s) => Math.abs(s - v) < Math.abs(best - v) ? s : best);
+}
+const speedLabel = v => v.toFixed(2).replace(/0$/, '') + '\u00d7';     // 1.0x, 1.1x, 2.25x
+
+function setSpeed(value) {
+  speedMultiplier = snapSpeed(value);
   localStorage.setItem('speedMultiplier', speedMultiplier);
-  document.getElementById('speed-val').textContent = speedMultiplier.toFixed(1) + '×';
+  document.getElementById('speed-slider').value = SPEED_VALUES.indexOf(speedMultiplier);
+  document.getElementById('speed-val').textContent = speedLabel(speedMultiplier);
   audio.playbackRate = speedMultiplier;
   if (!_mseOk) _audioB.playbackRate = speedMultiplier;
-};
+}
+
 (function initSpeedUI() {
   const slider = document.getElementById('speed-slider');
-  if (slider) slider.value = speedMultiplier;
-  const label = document.getElementById('speed-val');
-  if (label) label.textContent = speedMultiplier.toFixed(1) + '×';
+  slider.oninput = () => setSpeed(SPEED_VALUES[+slider.value]);
+  document.getElementById('speed-val').onclick = () => setSpeed(1);
+  setSpeed(Number.isFinite(speedMultiplier) ? speedMultiplier : 1);
 })();
 
 (function initModeToggle() {

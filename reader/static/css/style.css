@@ -790,7 +790,7 @@ body.theme-paper .voice-swatch[style] {
 
 .pb-label { font-size: 0.72rem; color: var(--text3); }
 .pb-slider {
-  width: 72px; accent-color: var(--accent);
+  width: 120px; accent-color: var(--accent);
   cursor: pointer;
 }
 
