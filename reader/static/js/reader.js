@@ -31,6 +31,7 @@ let _sb        = null;   // SourceBuffer
 let _sbReady   = false;  // SourceBuffer ready to accept appends
 let _sbQ       = [];     // pending append queue [{buf, res, rej}]
 let _segStart  = {};     // segIdx -> chapter-timeline start (seconds)
+let _segMax    = -1;     // upper bound on any index in _segStart (never lowered by a failed append), so scans can stop there
 let _segEnd    = {};     // segIdx -> chapter-timeline end   (seconds)
 let _mseNext   = 0;      // expected start time for the next segment to append
 let _mseGenId  = 0;      // incremented on teardown; stale appenders bail out
@@ -574,7 +575,7 @@ function _teardownMSE({ keepSrc = false } = {}) {
     _ms = null;
   }
   if (!keepSrc && !_autoAdvancing) audio.src = '';
-  _segStart = {};
+  _segStart = {}; _segMax = -1;
   _segEnd   = {};
   _chapterAudioChId    = null;
   _chapterPrerenderChId = null;
@@ -664,6 +665,7 @@ async function _appendSeg(idx, genId, data, buf, ch) {
   if (_segStart[idx] !== undefined) return true; // another caller appended it first
 
   _segStart[idx] = _mseNext;
+  _segMax = Math.max(_segMax, idx);
   ch.durations[idx] = data.duration_sec;
 
   try { await _sbAppend(buf); }
@@ -774,10 +776,11 @@ async function _playSegmentChapterMode(idx, gen) {
     }
 
     if (gen !== _playGen || !isPlaying) return true;
-    _segStart = {};
+    _segStart = {}; _segMax = -1;
     _segEnd   = {};
     for (const { idx: i, t_start, t_end } of data.timeline) {
       _segStart[i]     = t_start;
+      _segMax = Math.max(_segMax, i);
       _segEnd[i]       = t_end;
       ch.durations[i] = t_end - t_start;
     }
@@ -1091,7 +1094,7 @@ function stopPlayback() {
     _preloadData      = null;
     _chapterAudioChId    = null;
     _chapterPrerenderChId = null;
-    _segStart            = {};
+    _segStart            = {}; _segMax = -1;
     _segEnd              = {};
   }
   if (chapter.id) queueProgressSave(chapter.id, currentSegIdx);
@@ -1123,15 +1126,19 @@ let _timelineRetryAt = 0;
 function _followTimeline() {
   if (!isPlaying || !(_mseOk || _fullChapterMode)) return false;
   const t = audio.currentTime;
-  let reached = -1, firstMissing = -1;
-  for (let ni = currentSegIdx + 1; ni < chapter.segments.length; ni++) {
+  // Nothing past _segMax is appended, so there is nothing to look at there: the scan is a few entries
+  // (usually one), not the rest of the chapter, however long the next segment's speech takes.
+  const last = Math.min(_segMax, chapter.segments.length - 1);
+  let reached = -1, firstMissing = -1, blocked = false;
+  for (let ni = currentSegIdx + 1; ni <= last; ni++) {
     const start = _segStart[ni];
     if (start === undefined) {
       if (firstMissing < 0) firstMissing = ni;     // not appended yet
       continue;
     }
-    if (t >= start) reached = ni; else break;      // the next appended segment hasn't started yet
+    if (t >= start) reached = ni; else { blocked = true; break; }      // the next appended segment hasn't started yet
   }
+  if (!blocked && firstMissing < 0 && Math.max(last, currentSegIdx) + 1 < chapter.segments.length) firstMissing = Math.max(last, currentSegIdx) + 1;
   if (reached >= 0) { _onSegmentChange(reached); return true; }
   // Waiting on a segment whose TTS wasn't ready: retry the append, but not on every update.
   if (firstMissing >= 0 && Date.now() >= _timelineRetryAt) {
