@@ -1758,7 +1758,9 @@ function openSpeakerEditor(idx = currentSegIdx) {
   const n = scope => _speakerScopeIndices(idx, scope).length;
   document.getElementById('speaker-quote-n').textContent = `(${n('quote')} sentence${n('quote') === 1 ? '' : 's'})`;
   document.getElementById('speaker-para-n').textContent  = `(${n('paragraph')} spoken)`;
-  document.querySelector('input[name="speaker-scope"][value="segment"]').checked = true;
+  // A sentence that opens or closes with a quotation mark is part of a quote: default to the whole quote.
+  const quoted = /^["“”]|["“”]$/.test(seg.text.trim());
+  document.querySelector(`input[name="speaker-scope"][value="${quoted ? 'quote' : 'segment'}"]`).checked = true;
   document.getElementById('speaker-new-name').value = '';
   onSpeakerSelectChange();
   document.getElementById('speaker-modal').classList.remove('hidden');
