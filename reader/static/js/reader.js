@@ -887,9 +887,11 @@ async function playSegment(idx) {
       // Append up to idx if not yet in buffer
       if (_segStart[idx] === undefined) {
         charEl.textContent = `⏳ ${charLabel}`;
+        // A fresh stream starts at this segment (its offset is already where the segment belongs),
+        // so there is nothing earlier to load; with a stream in progress, continue after its last segment.
         const last = Object.keys(_segStart).length
           ? Math.max(...Object.keys(_segStart).map(Number))
-          : -1;
+          : idx - 1;
         for (let i = last + 1; i <= idx; i++) {
           if (gen !== _playGen || !isPlaying) return;
           if (!await _fetchAndAppendWithRetry(i, genId)) {
