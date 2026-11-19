@@ -3,7 +3,7 @@
 import numpy as np
 
 from core.base_engine import SAMPLE_RATE
-from core.kokoro_engine import KokoroEngine, pick_voice, trim_silence
+from core.kokoro_engine import _CURLY_APOSTROPHE_RE, KokoroEngine, pick_voice, trim_silence
 
 SR = SAMPLE_RATE
 
@@ -39,3 +39,8 @@ def test_cache_key_depends_on_voice_text_and_speed_not_reference_audio():
     assert base != key("Hello.", "female", None, 1.0)
     assert base != key("Hello.", "male", None, 1.1)
 
+
+
+def test_curly_apostrophes_inside_words_become_straight_but_quotes_stay():
+    text = "like a shark’s. And don’t ‘black’ eyes, ʼtis"
+    assert _CURLY_APOSTROPHE_RE.sub("'", text) == "like a shark's. And don't ‘black’ eyes, ʼtis"

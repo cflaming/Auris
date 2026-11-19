@@ -41,9 +41,12 @@ _BRITISH = {
 _SILENCE_THRESHOLD = 0.004   # |amplitude| below this counts as silence
 _LEAD_PAD_SEC = 0.04
 _TAIL_PAD_SEC = 0.15
-_CACHE_VERSION = 2           # bump when output processing changes (invalidates cached WAVs)
+_CACHE_VERSION = 3           # bump when output processing changes (invalidates cached WAVs)
 
 _TAG_RE = re.compile(r"\[[A-Za-z][A-Za-z\- ]*\]")  # OmniVoice expression tags, e.g. [laughter]
+# A curly apostrophe inside a word ("shark’s.") is read as a closing quote by Kokoro's
+# phonemizer when punctuation follows, giving "shark ... es". Straight ones are fine.
+_CURLY_APOSTROPHE_RE = re.compile(r"(?<=\w)[’‘ʼ](?=\w)")
 
 
 def trim_silence(audio: np.ndarray) -> np.ndarray:
@@ -127,7 +130,7 @@ class KokoroEngine(BaseEngine):
     def _synthesize_audio(self, text, instruct=None, ref_audio=None, ref_text=None,
                           speed=1.0, num_step=32) -> np.ndarray:
         voice = pick_voice(instruct)
-        clean = _TAG_RE.sub("", text).strip()
+        clean = _CURLY_APOSTROPHE_RE.sub("'", _TAG_RE.sub("", text)).strip()
         if not clean:
             return np.zeros(0, dtype=np.float32)
         with self._lock:
