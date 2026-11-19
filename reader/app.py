@@ -1312,13 +1312,15 @@ def tts_generate():
             'cached': True,
         })
 
-    with get_conn() as conn:
-        char = conn.execute(
-            'SELECT * FROM characters WHERE book_id=? AND name=?',
-            (book_id, seg['character_name'])
-        ).fetchone() if seg['character_name'] else None
+    char = None
+    if seg['character_name']:
+        with get_conn() as conn:
+            char = conn.execute(
+                'SELECT ref_audio_path FROM characters WHERE book_id=? AND name=?',
+                (book_id, seg['character_name'])
+            ).fetchone()
     # No character of their own (narration, or the "other speaker" label): the narrator's voice.
-    ref_audio = (dict(char)['ref_audio_path'] or None) if char else _book_narrator_ref_audio(book_id)
+    ref_audio = (char['ref_audio_path'] or None) if char else _book_narrator_ref_audio(book_id)
 
     rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
     try:
@@ -1493,6 +1495,7 @@ def _list_corrections(book_id: int) -> list[dict]:
             'JOIN chapters c ON c.id = sp.chapter_id WHERE sp.book_id=? ORDER BY c.order_num, sp.chapter_id',
             (book_id,)).fetchall()
         known = {r['name'] for r in conn.execute('SELECT name FROM characters WHERE book_id=?', (book_id,))}
+    known.add(OTHER_SPEAKER)
     out = []
     for chapter_id, items in groupby(rows, key=lambda r: r['chapter_id']):
         current = {s['anchor']: (i, s) for i, s in enumerate(_compute_segments_for_chapter(book_id, chapter_id))}
@@ -1501,7 +1504,7 @@ def _list_corrections(book_id: int) -> list[dict]:
             index, seg = current.get(r['anchor'], (None, None))
             if seg is None:
                 status = 'missing'
-            elif r['character_name'] not in (None, OTHER_SPEAKER) and r['character_name'] not in known:
+            elif r['character_name'] is not None and r['character_name'] not in known:
                 status = 'ignored'
             else:
                 status = 'active'

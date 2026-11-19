@@ -2252,7 +2252,7 @@ function buildSpeakerRows(query) {
     e.name.toLowerCase().includes(q) || e.aliases.some(a => a.toLowerCase().includes(q)));
   matches.sort((a, b) => (b.name.toLowerCase().startsWith(q)) - (a.name.toLowerCase().startsWith(q)));   // stable: names starting with it first
   if ('narrator'.startsWith(q)) rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
-  if (OTHER_SPEAKER.toLowerCase().includes(q) || 'other'.startsWith(q)) rows.push(_otherRow);
+  if (OTHER_SPEAKER.toLowerCase().includes(q)) rows.push(_otherRow);
   rows.push(...matches.map(e => row(e)));
   const known = everyone.some(e => [e.name, ...e.aliases].some(n => n.toLowerCase() === q));
   if (!known && q !== 'narrator' && q !== OTHER_SPEAKER.toLowerCase()) rows.push({ kind: 'new', value: '__new__', label: `+ Add “${query.trim()}” as a new character`, newName: query.trim() });

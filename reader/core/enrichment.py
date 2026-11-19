@@ -876,7 +876,7 @@ def enrich_chapter(
                 overridden = (anchor in speaker_overrides and not single_narrator_mode
                               and (override is None or override == OTHER_SPEAKER or override in character_map))
                 if overridden:
-                    character_name = override if override == OTHER_SPEAKER else _canonical(override, character_map)
+                    character_name = _canonical(override, character_map)      # OTHER_SPEAKER is not in the map: kept as is
                 is_whisper = is_quote and bool(_WHISPER_RE.search(sentence) or _WHISPER_RE.search(attribution))
 
                 if character_name:
