@@ -5,7 +5,7 @@ The server is started once per run and reset between tests. Each test gets:
     reader   open_reader(chapter=None, segment=None) -> the loaded page
     perf     records what the page cost (requests, bytes, TTS encodes, script time); printed at the end
              of the run and saved to tests/browser/perf-report.json
-Run just these with:  pytest tests/browser     (needs: pip install pytest-playwright && playwright install chromium)
+Run just these with:  uv run --no-sync pytest tests/browser     (once: uv run --no-sync playwright install chromium)
 """
 
 import json
@@ -84,7 +84,7 @@ def _server(tmp_path_factory):
 def site(_server):
     ids = _get(f"{_server}/__reset", data=b"")
     return SimpleNamespace(
-        url=_server, book_id=ids["book_id"], chapter_id=ids["chapter_ids"][0], chapter_ids=ids["chapter_ids"],
+        url=_server, book_id=ids["book_id"], chapter_id=ids["chapter_ids"][0],
         stats=lambda: _get(f"{_server}/__stats"),
         api=lambda path, data=None: _get(f"{_server}{path}", None if data is None else json.dumps(data).encode()),
     )
@@ -98,23 +98,21 @@ def _route(url: str) -> str:
 
 @pytest.fixture
 def perf(page, site, request):
-    """What the page cost during the test: requests by route, bytes, TTS encodes, main-thread time."""
-    reqs, sizes = Counter(), []
-
-    def done(req):
-        reqs[f"{req.method} {_route(req.url)}"] += 1
-        sizes.append(req)
-    page.on("requestfinished", done)
+    """Records what the page cost during the test: requests by route, bytes, TTS encodes, main-thread time.
+    (`reader` uses it, so a test that opens the reader needs nothing extra.)"""
+    finished = []
+    page.on("requestfinished", lambda req: finished.append(req))
     cdp = page.context.new_cdp_session(page)
     cdp.send("Performance.enable")
-    yield SimpleNamespace(requests=reqs)
+    yield
     metrics = {m["name"]: m["value"] for m in cdp.send("Performance.getMetrics")["metrics"]}
-    total = sum((r.sizes()["responseBodySize"] + r.sizes()["responseHeadersSize"]) for r in sizes)
+    by_route = Counter(f"{r.method} {_route(r.url)}" for r in finished)
+    total = sum(r.sizes()["responseBodySize"] + r.sizes()["responseHeadersSize"] for r in finished)
     server = site.stats()
     _RECORDS.append({
         "test": request.node.name,
-        "requests": sum(reqs.values()),
-        "by_route": dict(reqs),
+        "requests": len(finished),
+        "by_route": dict(by_route),
         "bytes_downloaded": total,
         "tts_encodes": server["encodes"],
         "ffmpeg_conversions": server["fmp4_conversions"],

@@ -822,7 +822,8 @@ def _ordered_characters(rows) -> list[dict]:
 def list_characters(book_id):
     with get_conn() as conn:
         rows = conn.execute('SELECT * FROM characters WHERE book_id=?', (book_id,)).fetchall()
-        by_hand, merge_targets = _character_usage(conn, book_id)
+        by_hand = _hand_assignments(conn, book_id)
+    merge_targets = {r['alias_of'] for r in rows if r['alias_of'] is not None}      # characters others are merged into
     chars = _ordered_characters(rows)
     for c in chars:
         last, assigned = by_hand.get(c['name'], (None, 0))
@@ -831,15 +832,11 @@ def list_characters(book_id):
     return jsonify(chars)
 
 
-def _character_usage(conn, book_id):
-    """What depends on each character: {name: (last hand assignment, how many)} and the ids of
-    characters that others are merged into. Used to list them and to decide whether one can be deleted."""
-    by_hand = {r[0]: (r[1], r[2]) for r in conn.execute(
+def _hand_assignments(conn, book_id):
+    """{character name: (when a sentence was last assigned to them by hand, how many)}."""
+    return {r[0]: (r[1], r[2]) for r in conn.execute(
         'SELECT character_name, MAX(updated_at), COUNT(*) FROM segment_speakers '
         'WHERE book_id=? AND character_name IS NOT NULL GROUP BY character_name', (book_id,))}
-    merge_targets = {r[0] for r in conn.execute(
-        'SELECT DISTINCT alias_of FROM characters WHERE book_id=? AND alias_of IS NOT NULL', (book_id,))}
-    return by_hand, merge_targets
 
 
 def _delete_blocker(char, assigned_by_hand: int, has_merged: bool):
@@ -860,8 +857,10 @@ def delete_character(book_id, char_id):
         char = conn.execute('SELECT * FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
         if not char:
             return jsonify({'error': 'Character not found'}), 404
-        by_hand, merge_targets = _character_usage(conn, book_id)
-        blocker = _delete_blocker(char, by_hand.get(char['name'], (None, 0))[1], char_id in merge_targets)
+        assigned = conn.execute('SELECT COUNT(*) FROM segment_speakers WHERE book_id=? AND character_name=?',
+                                (book_id, char['name'])).fetchone()[0]
+        has_merged = conn.execute('SELECT 1 FROM characters WHERE book_id=? AND alias_of=?', (book_id, char_id)).fetchone()
+        blocker = _delete_blocker(char, assigned, bool(has_merged))
         if blocker:
             return jsonify({'error': blocker}), 409
         conn.execute('DELETE FROM characters WHERE id=?', (char_id,))

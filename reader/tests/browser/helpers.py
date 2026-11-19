@@ -22,3 +22,12 @@ def dialogue_index(page, after=0):
 def play_generation(page):
     """Changes whenever playback is (re)started from a sentence."""
     return page.evaluate("_playGen")
+
+
+def pick(page, label):
+    """Choose a row in the override dialog's speaker list."""
+    page.locator("#speaker-list li", has_text=label).first.click()
+
+
+def apply(page):
+    page.locator("#speaker-footer").get_by_role("button", name="Apply", exact=True).click()

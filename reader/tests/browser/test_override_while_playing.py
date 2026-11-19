@@ -2,8 +2,7 @@
 
 import pytest
 
-from tests.browser.helpers import play_generation, right_click_sentence, start_playing
-from tests.browser.test_override_dialog import apply, pick
+from tests.browser.helpers import apply, dialogue_index, pick, play_generation, right_click_sentence, start_playing
 
 
 def correct_to_other(page, idx):
@@ -21,14 +20,10 @@ def playing(reader):
     return page
 
 
-def dialogue_after(page, start):
-    return page.evaluate("a => chapter.segments.findIndex((s, i) => i >= a && s.is_dialogue)", start)
-
-
 def test_correcting_a_sentence_already_read_keeps_playing(playing):
     page = playing
     gen, t = play_generation(page), page.evaluate("audio.currentTime")
-    correct_to_other(page, dialogue_after(page, 10))
+    correct_to_other(page, dialogue_index(page, 10))
     assert play_generation(page) == gen                            # not restarted
     assert page.evaluate("isPlaying && !audio.paused && audio.currentTime >= " + str(t))
     assert page.locator(".sentence.playing").count() >= 1          # still highlighting what plays
@@ -37,7 +32,7 @@ def test_correcting_a_sentence_already_read_keeps_playing(playing):
 def test_correcting_a_sentence_far_ahead_keeps_playing(playing):
     page = playing
     gen = play_generation(page)
-    correct_to_other(page, dialogue_after(page, page.evaluate("currentSegIdx") + 30))
+    correct_to_other(page, dialogue_index(page, page.evaluate("currentSegIdx") + 30))
     assert play_generation(page) == gen
     assert page.evaluate("isPlaying && !audio.paused")
 
@@ -45,14 +40,14 @@ def test_correcting_a_sentence_far_ahead_keeps_playing(playing):
 def test_correcting_a_sentence_already_loaded_ahead_restarts_playback(playing):
     page = playing
     gen = play_generation(page)
-    correct_to_other(page, dialogue_after(page, page.evaluate("currentSegIdx + 1")))
+    correct_to_other(page, dialogue_index(page, page.evaluate("currentSegIdx + 1")))
     page.wait_for_function("g => _playGen !== g", arg=gen)         # the stream held the old voice for it
     page.wait_for_function("isPlaying && !audio.paused")
 
 
-def test_a_correction_costs_one_refresh_not_a_stream_rebuild(site, playing, perf):
+def test_a_correction_costs_one_refresh_not_a_stream_rebuild(site, playing):
     page = playing
     before = site.stats().get("requests GET /api/tts/segments/<int:book_id>/<int:chapter_id>", 0)
-    correct_to_other(page, dialogue_after(page, 10))
+    correct_to_other(page, dialogue_index(page, 10))
     after = site.stats().get("requests GET /api/tts/segments/<int:book_id>/<int:chapter_id>", 0)
     assert after - before == 1

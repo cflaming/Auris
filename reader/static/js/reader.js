@@ -2413,45 +2413,57 @@ function moveSpeakerActive(step) {
   });
 })();
 
+// Run a page change, leaving the scroll position where it was.
+async function _keepingScroll(change) {
+  const scroller = document.getElementById('chapter-content');
+  const scrolls = [scroller.scrollTop, window.scrollY];
+  await change();
+  scroller.scrollTop = scrolls[0];
+  window.scrollTo(0, scrolls[1]);
+}
+
+// Whether the audio playing now is out of date after these sentences (null: any of them) changed speaker:
+// the sentence playing, or those already loaded after it. Sentences already played, or not loaded yet,
+// don't matter to what is playing.
+function _playingAudioStale(changed) {
+  if (!changed) return true;
+  const loadedTo = _mseOk && !_fullChapterMode ? Math.max(_segMax, currentSegIdx) : Infinity;    // one file or preloads: assume all of it is loaded
+  return changed.some(i => i >= currentSegIdx && i <= loadedTo);
+}
+
 // Reload the open chapter so changed attribution, colours and voices take effect, leaving
 // everything else as it was: the same sentence current (and highlighted only if it was), the
 // same scroll position, and playback resumed from that sentence if it was playing.
-// `changed` are the sentences whose speaker just changed. Playback is only disturbed when the audio it
-// has (the sentence playing, or those already loaded after it) is now out of date; sentences already
-// played, or not loaded yet, don't matter to it, and only the page's labels are refreshed.
+// `changed` are the sentences whose speaker just changed (null: any may have). When playback is
+// unaffected, only the page's labels are refreshed and the audio carries on.
 async function reloadChapterInPlace(changed = null) {
+  if (isPlaying && !_playingAudioStale(changed)) return refreshChapterInPlace(changed);
   const keep = currentSegIdx;
   const wasPlaying = isPlaying;
-  // Beyond this, nothing is loaded ahead (one file or preloads: assume all of it is).
-  const loadedTo = _mseOk && !_fullChapterMode ? Math.max(_segMax, keep) : Infinity;
-  const stale = !changed || changed.some(i => i >= keep && i <= loadedTo);      // no list: anything may have changed
-  const keepPlaying = wasPlaying && !stale;                           // only labels change: the audio carries on
   const wasHighlighted = !!document.querySelector('#chapter-content .playing');
   const wasLocked = _cursorLocked;
-  const scroller = document.getElementById('chapter-content');
-  const scrolls = [scroller.scrollTop, window.scrollY];
-  if (keepPlaying) {
-    const ch = chapter;
-    const [segs, chars] = await _fetchChapterData(ch.id);
-    if (chapter !== ch) return;
+  await _keepingScroll(() => openChapter(chapter.id, {
+    resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
+  }));
+  _cursorLocked = wasLocked;
+  updateFollowButton();
+  if (wasPlaying) playSegment(keep);
+}
+
+// Redraw the chapter with its new labels without touching playback.
+async function refreshChapterInPlace(changed) {
+  const ch = chapter;
+  const [segs, chars] = await _fetchChapterData(ch.id);
+  if (chapter !== ch) return;
+  await _keepingScroll(async () => {
     changed.forEach(i => {
       _forgetAudio(i, ch);                                             // requested afresh when needed
       if (_segStart[i] !== undefined) _staleSegs.add(i);               // already played: the stream still holds the old audio
     });
     _showChapterData(ch, segs, chars);
-    setCurrentSegment(keep, { highlight: true, behavior: 'auto', save: false });
-    startWordHighlight(keep, _segDur(keep));                           // the words it was following were just redrawn
-  } else {
-    await openChapter(chapter.id, {
-      resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
-    });
-  }
-  scroller.scrollTop = scrolls[0];
-  window.scrollTo(0, scrolls[1]);
-  if (keepPlaying) return;
-  _cursorLocked = wasLocked;
-  updateFollowButton();
-  if (wasPlaying) playSegment(keep);
+    setCurrentSegment(currentSegIdx, { highlight: true, behavior: 'auto', save: false });
+    startWordHighlight(currentSegIdx, _segDur(currentSegIdx));         // the words it was following were just redrawn
+  });
 }
 
 async function applySpeaker(reset) {

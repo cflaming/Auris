@@ -3,7 +3,7 @@
 from tests.browser.helpers import start_playing
 
 
-def test_resuming_mid_chapter_loads_from_that_sentence_not_the_chapter_start(site, reader, perf):
+def test_resuming_mid_chapter_loads_from_that_sentence_not_the_chapter_start(site, reader):
     page = reader(segment=60)
     start_playing(page)
     s = site.stats()
@@ -15,7 +15,7 @@ def test_resuming_mid_chapter_loads_from_that_sentence_not_the_chapter_start(sit
     assert page.evaluate("Math.min(...Object.keys(_segStart).map(Number))") >= 60
 
 
-def test_while_paused_the_buffer_generates_ten_ahead_then_goes_quiet(site, reader, perf):
+def test_while_paused_the_buffer_generates_ten_ahead_then_goes_quiet(site, reader):
     page = reader(segment=5)
     page.wait_for_function("Array.from({length: 11}, (_, i) => chapter.cache.has(5 + i)).every(Boolean)", timeout=20000)
     page.wait_for_timeout(1500)
@@ -25,7 +25,7 @@ def test_while_paused_the_buffer_generates_ten_ahead_then_goes_quiet(site, reade
     assert after == before == 11                                 # the cursor sentence plus ten after it, then nothing more
 
 
-def test_moving_the_cursor_while_paused_extends_the_buffer_by_only_what_is_new(site, reader, perf):
+def test_moving_the_cursor_while_paused_extends_the_buffer_by_only_what_is_new(site, reader):
     page = reader(segment=5)
     page.wait_for_function("chapter.cache.has(15)", timeout=20000)
     page.wait_for_timeout(500)

@@ -1,22 +1,16 @@
 """The speaker-override dialog: its views, keys, focus and what applying does to the page."""
 
+import re
+
 from playwright.sync_api import expect
 
-from tests.browser.helpers import dialogue_index, right_click_sentence
+from tests.browser.helpers import apply, dialogue_index, pick, right_click_sentence
 
 
 def open_dialog(page, idx=None):
     idx = dialogue_index(page) if idx is None else idx
     right_click_sentence(page, idx)
     return idx
-
-
-def pick(page, label):
-    page.locator("#speaker-list li", has_text=label).first.click()
-
-
-def apply(page):
-    page.locator("#speaker-footer").get_by_role("button", name="Apply", exact=True).click()
 
 
 def test_other_speaker_is_offered_right_under_narrator_and_labels_the_sentence(reader):
@@ -67,14 +61,14 @@ def test_new_character_takes_over_the_dialog_and_escape_goes_back(reader):
     open_dialog(page)
     pick(page, "+ New character")
     modal = page.locator("#speaker-modal .speaker-modal")
-    expect(modal).to_have_class(__import__("re").compile(r"showing-new"))
+    expect(modal).to_have_class(re.compile(r"showing-new"))
     expect(page.locator("#speaker-new-name")).to_be_focused()
     footer = page.locator(".speaker-new-footer")
     expect(footer).to_be_visible()
     box, viewport = footer.bounding_box(), page.viewport_size
     assert box["y"] + box["height"] <= viewport["height"]         # the footer is on screen, not below the fold
     page.keyboard.press("Escape")
-    expect(modal).not_to_have_class(__import__("re").compile(r"showing-new"))
+    expect(modal).not_to_have_class(re.compile(r"showing-new"))
     expect(page.locator("#speaker-modal")).to_be_visible()
 
 
