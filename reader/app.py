@@ -28,7 +28,7 @@ from core.base_engine import SAMPLE_RATE
 from core.engine_manager import EngineManager
 from core import characters as char_module
 from core import enrichment, exporter, structure, settings as app_settings
-from core.enrichment import ENRICHMENT_VERSION
+from core.enrichment import ENRICHMENT_VERSION, OTHER_SPEAKER
 from core.parser import epub_parser, pdf_parser, txt_parser
 
 logging.basicConfig(level=logging.INFO,
@@ -900,6 +900,8 @@ def _parse_new_character(book_id: int, body: dict) -> tuple[str, str]:
         _reject('Name is required (max 60 characters)', 400)
     if gender not in _VALID_GENDERS:
         _reject('gender must be male, female or unknown', 400)
+    if name.lower() in ('narrator', OTHER_SPEAKER.lower()):
+        _reject(f'"{name}" is a reserved name', 400)
     with get_conn() as conn:
         if not conn.execute('SELECT 1 FROM books WHERE id=?', (book_id,)).fetchone():
             _reject('Book not found', 404)
@@ -1310,15 +1312,13 @@ def tts_generate():
             'cached': True,
         })
 
-    if seg['character_name']:
-        with get_conn() as conn:
-            char = conn.execute(
-                'SELECT * FROM characters WHERE book_id=? AND name=?',
-                (book_id, seg['character_name'])
-            ).fetchone()
-        ref_audio = dict(char)['ref_audio_path'] if char and char['ref_audio_path'] else None
-    else:
-        ref_audio = _book_narrator_ref_audio(book_id)
+    with get_conn() as conn:
+        char = conn.execute(
+            'SELECT * FROM characters WHERE book_id=? AND name=?',
+            (book_id, seg['character_name'])
+        ).fetchone() if seg['character_name'] else None
+    # No character of their own (narration, or the "other speaker" label): the narrator's voice.
+    ref_audio = (dict(char)['ref_audio_path'] or None) if char else _book_narrator_ref_audio(book_id)
 
     rid = _tts_start(book_id, chapter_id, segment_index, seg['character_name'])
     try:
@@ -1437,7 +1437,7 @@ def set_chapter_speakers(book_id, chapter_id):
         return jsonify({'error': 'No matching sentences in this chapter'}), 404
 
     with get_conn() as conn:
-        if not reset and name is not None and not conn.execute(
+        if not reset and name not in (None, OTHER_SPEAKER) and not conn.execute(
                 'SELECT 1 FROM characters WHERE book_id=? AND name=?', (book_id, name)).fetchone():
             return jsonify({'error': f'Unknown character: {name}'}), 400
         if reset:
@@ -1501,7 +1501,7 @@ def _list_corrections(book_id: int) -> list[dict]:
             index, seg = current.get(r['anchor'], (None, None))
             if seg is None:
                 status = 'missing'
-            elif r['character_name'] is not None and r['character_name'] not in known:
+            elif r['character_name'] not in (None, OTHER_SPEAKER) and r['character_name'] not in known:
                 status = 'ignored'
             else:
                 status = 'active'

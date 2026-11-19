@@ -14,6 +14,10 @@ import re
 # existing stored segments to be discarded and rebuilt.
 ENRICHMENT_VERSION = 5
 
+# A correction can say "someone speaks here, but nobody with a voice of their own" (a crowd, a minor
+# voice). It reads in the narrator's voice but is labelled apart from narration, for training data.
+OTHER_SPEAKER = "Other speaker"
+
 def _canonical(name: str | None, character_map: dict) -> str | None:
     """Follow a merged character to the one whose voice it uses."""
     target = (character_map.get(name) or {}).get("canonical")
@@ -870,9 +874,9 @@ def enrich_chapter(
                 # A correction naming a character that no longer exists is ignored.
                 override = speaker_overrides.get(anchor)
                 overridden = (anchor in speaker_overrides and not single_narrator_mode
-                              and (override is None or override in character_map))
+                              and (override is None or override == OTHER_SPEAKER or override in character_map))
                 if overridden:
-                    character_name = _canonical(override, character_map)
+                    character_name = override if override == OTHER_SPEAKER else _canonical(override, character_map)
                 is_whisper = is_quote and bool(_WHISPER_RE.search(sentence) or _WHISPER_RE.search(attribution))
 
                 if character_name:

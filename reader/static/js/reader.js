@@ -2193,6 +2193,8 @@ function onSpeakerSelectChange() {
 // first), then the rest in Voice Studio's order. A character that is merged into another is not listed on its own; its group
 // is (under the head's name), and typing the merged name still finds the group.
 
+const OTHER_SPEAKER = 'Other speaker';   // someone speaks, but nobody with a voice of their own: read by the narrator, labelled apart (see core/enrichment.py)
+const _otherRow = { kind: 'other', value: OTHER_SPEAKER, label: OTHER_SPEAKER, sub: 'narrator’s voice' };
 let _speakerChoice = '';        // '' = narrator, '__new__', or a character name
 let _speakerPicked = false;     // a name has been picked in this dialog (so Enter on it again applies)
 let _speakerRows = [];          // what the list shows
@@ -2238,7 +2240,7 @@ function buildSpeakerRows(query) {
   });
   const rows = [];
   if (!q) {
-    rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
+    rows.push({ kind: 'narrator', value: '', label: 'Narrator' }, _otherRow);
     if (recent.length) rows.push({ kind: 'heading', label: 'Recently assigned' }, ...recent.map(e => row(e)));
     if (nearby.length) rows.push({ kind: 'heading', label: 'Speaking nearby' }, ...nearby.map(e => row(e)));
     if (rest.length) rows.push({ kind: 'heading', label: recent.length || nearby.length ? 'Everyone else' : 'Characters' }, ...rest.map(e => row(e)));
@@ -2250,9 +2252,10 @@ function buildSpeakerRows(query) {
     e.name.toLowerCase().includes(q) || e.aliases.some(a => a.toLowerCase().includes(q)));
   matches.sort((a, b) => (b.name.toLowerCase().startsWith(q)) - (a.name.toLowerCase().startsWith(q)));   // stable: names starting with it first
   if ('narrator'.startsWith(q)) rows.push({ kind: 'narrator', value: '', label: 'Narrator' });
+  if (OTHER_SPEAKER.toLowerCase().includes(q) || 'other'.startsWith(q)) rows.push(_otherRow);
   rows.push(...matches.map(e => row(e)));
   const known = everyone.some(e => [e.name, ...e.aliases].some(n => n.toLowerCase() === q));
-  if (!known && q !== 'narrator') rows.push({ kind: 'new', value: '__new__', label: `+ Add “${query.trim()}” as a new character`, newName: query.trim() });
+  if (!known && q !== 'narrator' && q !== OTHER_SPEAKER.toLowerCase()) rows.push({ kind: 'new', value: '__new__', label: `+ Add “${query.trim()}” as a new character`, newName: query.trim() });
   return rows;
 }
 

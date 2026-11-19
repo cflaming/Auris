@@ -235,6 +235,19 @@ def test_assign_a_sentence_to_the_new_character(make_book, segments, correct, cl
     assert by_text(segments(book), '"Then when?"')["character_name"] == "Evelyn"
 
 
+def test_other_speaker_is_a_label_apart_from_narration_in_the_narrators_voice(make_book, segments, correct, client, app_module):
+    book = make_book()
+    target = by_text(segments(book), '"Then when?"')
+    assert correct(book, [target["anchor"]], "Other speaker").status_code == 200
+    fixed = by_text(segments(book), '"Then when?"')
+    assert fixed["character_name"] == "Other speaker" and fixed["overridden"] and fixed["is_dialogue"]
+    full = app_module._compute_segments_for_chapter(book.id, book.chapters[0])
+    mine = next(s for s in full if s["text"] == '"Then when?"')
+    assert mine["instruct"] == app_module._default_narrator_instruct()      # the narrator's voice
+    row = client.get(f"/api/books/{book.id}/corrections").json[0]
+    assert row["corrected_speaker"] == "Other speaker" and row["status"] == "active"
+
+
 def test_add_character_validation(make_book, client):
     book = make_book()
     url = f"/api/books/{book.id}/characters"
@@ -242,6 +255,8 @@ def test_add_character_validation(make_book, client):
     assert client.post(url, json={"name": "X" * 61}).status_code == 400
     assert client.post(url, json={"name": "Zed", "gender": "robot"}).status_code == 400
     assert client.post(url, json={"name": "Amy"}).status_code == 409            # already exists
+    assert client.post(url, json={"name": "other speaker"}).status_code == 400   # reserved labels
+    assert client.post(url, json={"name": "Narrator"}).status_code == 400
     assert client.post("/api/books/999/characters", json={"name": "Zed"}).status_code == 404
 
 
