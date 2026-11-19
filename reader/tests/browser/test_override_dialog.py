@@ -26,7 +26,7 @@ def test_other_speaker_is_offered_right_under_narrator_and_labels_the_sentence(r
     assert options[:2] == ["Narrator", "Other speaker (narrator’s voice)"]
     pick(page, "Other speaker")
     apply(page)
-    page.wait_for_function("i => chapter.segments[i].character_name === 'Other speaker'", arg=idx)
+    page.wait_for_function("i => chapter.segments[i]?.character_name === 'Other speaker'", arg=idx)
     sentence = page.locator(f'.sentence[data-idx="{idx}"]').first
     expect(sentence).to_have_attribute("title", "Other speaker (corrected)")
     expect(page.locator("#speaker-modal")).to_be_hidden()

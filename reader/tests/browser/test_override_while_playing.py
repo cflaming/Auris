@@ -10,7 +10,7 @@ def correct_to_other(page, idx):
     right_click_sentence(page, idx)
     pick(page, "Other speaker")
     apply(page)
-    page.wait_for_function("i => chapter.segments[i].character_name === 'Other speaker'", arg=idx)
+    page.wait_for_function("i => chapter.segments[i]?.character_name === 'Other speaker'", arg=idx)
     page.wait_for_timeout(300)
 
 
