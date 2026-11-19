@@ -2419,35 +2419,36 @@ function moveSpeakerActive(step) {
 // `changed` are the sentences whose speaker just changed. Playback is only disturbed when the audio it
 // has (the sentence playing, or those already loaded after it) is now out of date; sentences already
 // played, or not loaded yet, don't matter to it, and only the page's labels are refreshed.
-async function reloadChapterInPlace(changed = []) {
+async function reloadChapterInPlace(changed = null) {
   const keep = currentSegIdx;
   const wasPlaying = isPlaying;
-  const loaded = _mseOk && !_fullChapterMode ? _segMax : Infinity;      // beyond this, nothing is loaded ahead (one file or preloads: assume all of it is)
-  const stale = changed.some(i => i >= keep && i <= Math.max(loaded, keep));
+  // Beyond this, nothing is loaded ahead (one file or preloads: assume all of it is).
+  const loadedTo = _mseOk && !_fullChapterMode ? Math.max(_segMax, keep) : Infinity;
+  const stale = !changed || changed.some(i => i >= keep && i <= loadedTo);      // no list: anything may have changed
+  const keepPlaying = wasPlaying && !stale;                           // only labels change: the audio carries on
   const wasHighlighted = !!document.querySelector('#chapter-content .playing');
   const wasLocked = _cursorLocked;
   const scroller = document.getElementById('chapter-content');
   const scrolls = [scroller.scrollTop, window.scrollY];
-  if (wasPlaying && !stale) {
+  if (keepPlaying) {
     const ch = chapter;
     const [segs, chars] = await _fetchChapterData(ch.id);
     if (chapter !== ch) return;
     changed.forEach(i => {
-      ch.cache.delete(i);                                              // its audio is requested afresh when needed
+      _forgetAudio(i, ch);                                             // requested afresh when needed
       if (_segStart[i] !== undefined) _staleSegs.add(i);               // already played: the stream still holds the old audio
     });
     _showChapterData(ch, segs, chars);
     setCurrentSegment(keep, { highlight: true, behavior: 'auto', save: false });
     startWordHighlight(keep, _segDur(keep));                           // the words it was following were just redrawn
-    scroller.scrollTop = scrolls[0];
-    window.scrollTo(0, scrolls[1]);
-    return;
+  } else {
+    await openChapter(chapter.id, {
+      resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
+    });
   }
-  await openChapter(chapter.id, {
-    resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
-  });
   scroller.scrollTop = scrolls[0];
   window.scrollTo(0, scrolls[1]);
+  if (keepPlaying) return;
   _cursorLocked = wasLocked;
   updateFollowButton();
   if (wasPlaying) playSegment(keep);
@@ -2485,7 +2486,7 @@ async function applySpeaker(reset) {
 
     closeSpeakerEditor();
     showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
-    await reloadChapterInPlace(addsCharacter ? chapter.segments.map((_, i) => i) : _speakerScopeIndices(idx, scope));
+    await reloadChapterInPlace(addsCharacter ? null : _speakerScopeIndices(idx, scope));
   } catch (e) {
     showToast(e.message || 'Request failed', 'err');
   }
