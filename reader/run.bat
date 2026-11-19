@@ -1,18 +1,25 @@
 @echo off
-:: Auris - Windows launcher
+:: Auris - Windows launcher (after `setup.bat`, see the README)
 :: The TTS model loads in the background; the app opens immediately.
-:: Model must be present at: ..\model_backup\OmniVoice\
 
 cd /d "%~dp0"
 
-set "PYTHON=python"
-if exist ".venv\Scripts\python.exe" set "PYTHON=.venv\Scripts\python.exe"
+where uv >nul 2>&1
+if errorlevel 1 (
+    echo uv is not installed. Get it from https://docs.astral.sh/uv/ and run: setup.bat
+    exit /b 1
+)
+if not exist ".venv" (
+    echo No environment yet. Run: setup.bat
+    exit /b 1
+)
 
-echo Starting OmniReader...
+echo Starting Auris...
 echo.
 echo Model status will appear in the top-right corner of the app.
 echo (Model loads in the background; you can browse and read while it loads.)
 echo.
 echo Press Ctrl+C to stop.
 
-"%PYTHON%" app.py %*
+:: --no-sync: keep whichever PyTorch build was chosen at setup time instead of re-syncing to the default
+uv run --no-sync app.py %*

@@ -1,44 +1,48 @@
 #!/usr/bin/env bash
-# Auris - Linux / macOS setup wrapper
-# Usage: bash setup.sh
+# Auris - Linux / macOS setup: creates .venv from uv.lock with the right PyTorch build.
 #
-# Creates .venv with uv when available (directly or through mise), so no
-# separately installed Python is needed. AURIS_PYTHON selects the version.
+# Usage: bash setup.sh                  first run: picks the build for this machine and remembers it
+#        bash setup.sh                  later runs: re-syncs with the remembered build (e.g. after a git pull)
+#        bash setup.sh --extra cpu      choose explicitly (cpu | cu128 | default) and remember that
+# Anything after the choice is passed to `uv sync` (for example --dry-run).
+#
+# The choice lives in .auris-extra. Delete it to have the machine detected again.
 
 set -e
 cd "$(dirname "$0")"
 
-WANT_PY="${AURIS_PYTHON:-3.11}"
-
-UV=()
-if command -v uv >/dev/null 2>&1; then
-    UV=(uv)
-elif command -v mise >/dev/null 2>&1 && mise which uv >/dev/null 2>&1; then
-    UV=(mise exec -- uv)
+if ! command -v uv >/dev/null 2>&1; then
+    echo "uv is not installed. Get it from https://docs.astral.sh/uv/"
+    exit 1
 fi
 
-if [ ${#UV[@]} -gt 0 ]; then
-    if [ -x ".venv/bin/python" ]; then
-        HAVE_PY=$(.venv/bin/python -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || true)
-        if [ "$HAVE_PY" != "$WANT_PY" ]; then
-            echo "Existing .venv uses Python ${HAVE_PY:-unknown}, wanted $WANT_PY; recreating..."
-            rm -rf .venv
-        fi
-    fi
-    if [ ! -x ".venv/bin/python" ]; then
-        echo "Creating virtual environment in .venv with uv (Python $WANT_PY)..."
-        "${UV[@]}" venv --seed --python "$WANT_PY" .venv
-    fi
-else
-    PYTHON=$(command -v python3 2>/dev/null || command -v python 2>/dev/null)
-    if [ -z "$PYTHON" ]; then
-        echo "Python not found. Install uv (https://docs.astral.sh/uv/) or Python 3.10+ first."
-        exit 1
-    fi
-    if [ ! -x ".venv/bin/python" ]; then
-        echo "Creating virtual environment in .venv with $PYTHON..."
-        "$PYTHON" -m venv .venv
-    fi
+CHOICE=""
+if [ "$1" = "--extra" ]; then
+    CHOICE="$2"
+    shift 2
+elif [ -f .auris-extra ]; then
+    CHOICE="$(cat .auris-extra)"
+    echo "Using the remembered PyTorch build: $CHOICE (bash setup.sh --extra <cpu|cu128|default> to change)"
 fi
 
-".venv/bin/python" setup.py
+if [ -z "$CHOICE" ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
+        CHOICE="default"                               # PyPI's macOS build (Apple Silicon: MPS)
+    elif command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi >/dev/null 2>&1; then
+        CHOICE="cu128"
+    else
+        CHOICE="cpu"
+    fi
+    echo "Detected this machine: PyTorch build $CHOICE"
+fi
+
+case "$CHOICE" in
+    cpu|cu128) EXTRA=(--extra "$CHOICE") ;;
+    default)   EXTRA=() ;;
+    *) echo "Unknown PyTorch build '$CHOICE' (use cpu, cu128 or default)"; exit 1 ;;
+esac
+
+uv sync "${EXTRA[@]}" "$@"
+case " $* " in *" --dry-run "*) ;; *) echo "$CHOICE" > .auris-extra ;; esac     # a dry run changes nothing, remembering included
+echo ""
+echo "Done. Start Auris with: bash run.sh"

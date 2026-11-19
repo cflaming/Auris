@@ -29,12 +29,12 @@ Everything runs locally after setup. No API keys. No hosted TTS dependency.
 - Upload reference WAV files for voice cloning.
 - Invalidate stale cached playback automatically when narrator or character voices change.
 - Export audio as WAV or MP3 and subtitles as ASS or SRT.
-- Run from a project-local `.venv` created by the installer.
+- Run from a project-local `.venv` created by `uv sync`.
 
 ## Requirements
 
-- Python 3.10 or later
-- `ffmpeg` on `PATH` for MP3 export
+- [uv](https://docs.astral.sh/uv/) (it downloads Python 3.11 itself, so no separate Python install is needed)
+- `ffmpeg` on `PATH` for MP3 export and browser streaming
 - OmniVoice model files stored locally
 - Optional NVIDIA GPU for faster inference
 
@@ -42,28 +42,22 @@ Everything runs locally after setup. No API keys. No hosted TTS dependency.
 
 ```bash
 git clone https://github.com/nikhilprasanth/Auris.git
-cd Auris
+cd Auris/reader
+bash setup.sh            # Linux / macOS         (Windows: setup.bat)
+bash run.sh              # start it              (Windows: run.bat)
 ```
 
-Run the installer:
+`setup` runs `uv sync`, which creates `.venv` from `uv.lock` (the app, PyTorch, OmniVoice, spaCy and its
+English model). It picks the PyTorch build for the machine the first time (NVIDIA GPU found: CUDA 12.8; macOS:
+PyPI's Apple Silicon build; otherwise CPU) and remembers it in `reader/.auris-extra`, so running `setup` again
+after a `git pull` re-syncs with the same build. To choose yourself:
 
 ```bash
-# Windows
-reader\setup.bat
-
-# Linux / macOS
-bash reader/setup.sh
+bash setup.sh --extra cu128     # cpu | cu128 | default (PyPI's own build)
 ```
 
-`setup.bat` and `setup.sh` create `reader/.venv` with [uv](https://docs.astral.sh/uv/) when it is available, directly or through `mise exec`, so no separately installed Python is needed; uv downloads Python 3.11 (`AURIS_PYTHON=3.12` selects another version). An existing `.venv` on a different Python version is recreated. Without uv they fall back to `python3`/`python` (or the `py` launcher on Windows).
-
-Or directly:
-
-```bash
-python reader/setup.py
-```
-
-The installer detects CUDA, Apple Silicon, or CPU, creates `reader/.venv`, installs PyTorch, OmniVoice, spaCy, and the reader dependencies, then downloads the `en_core_web_sm` spaCy model when network access is available.
+Plain `uv sync --extra cu128` works too, but it is not remembered. `run` uses `uv run --no-sync`, so the
+build you chose stays (a plain `uv run` would sync back to the default one).
 
 ## Model setup
 
@@ -91,9 +85,14 @@ temporary database and a fake engine):
 
 ```bash
 cd reader
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest
+uv sync                  # includes pytest and pytest-playwright
+uv run --no-sync pytest  # everything
 ```
+
+The browser tests in `tests/browser` drive the real reader page in Chromium against a throwaway
+server whose TTS engine makes tones, and print what each test cost (requests, bytes, TTS encodes,
+main-thread time). They need a one-time `uv run --no-sync playwright install chromium`; without Playwright
+installed they are skipped. `uv run --no-sync pytest tests/browser` runs just them.
 
 They cover speaker detection on a short demo story (`tests/demo_story.py`), speaker
 corrections and adding characters through the API, the audio cache, database
@@ -150,30 +149,14 @@ Reference: `https://github.com/k2-fsa/OmniVoice/blob/master/docs/voice-design.md
 
 ## Offline installs
 
-Local wheels are not used by default.
-
-If you intentionally maintain your own wheel cache, opt in explicitly:
+uv can install from a folder of wheels instead of the network:
 
 ```bash
-# Windows
-set AURIS_USE_LOCAL_WHEELS=1
-reader\setup.bat
-
-# Linux / macOS
-AURIS_USE_LOCAL_WHEELS=1 bash reader/setup.sh
+uv sync --offline                                  # only what is already in uv's cache
+uv sync --no-index --find-links /path/to/wheels    # only wheels from a folder
 ```
 
-For a strict offline install:
-
-```bash
-# Windows
-set AURIS_OFFLINE=1
-set AURIS_WHEELS_DIR=E:\path\to\wheels
-reader\setup.bat
-
-# Linux / macOS
-AURIS_OFFLINE=1 AURIS_WHEELS_DIR=/path/to/wheels bash reader/setup.sh
-```
+The spaCy English model is a locked dependency (a wheel URL), so it needs to be cached or in that folder too.
 
 ## Project structure
 
@@ -181,15 +164,13 @@ AURIS_OFFLINE=1 AURIS_WHEELS_DIR=/path/to/wheels bash reader/setup.sh
 Auris/
 |-- README.md
 |-- LICENSE
-|-- wheels/          ← offline wheel cache (optional)
 `-- reader/
     |-- app.py
-    |-- setup.py     ← cross-platform installer (called by setup.bat / setup.sh)
-    |-- setup.bat    ← Windows installer
-    |-- setup.sh     ← Linux / macOS installer
+    |-- pyproject.toml ← dependencies (uv); uv.lock pins them
+    |-- setup.bat    ← Windows setup (uv sync with the right PyTorch build)
+    |-- setup.sh     ← Linux / macOS setup
     |-- run.bat      ← Windows launcher
     |-- run.sh       ← Linux / macOS launcher
-    |-- requirements.txt
     |-- core/
     |-- static/
     |-- templates/
@@ -236,9 +217,9 @@ OmniVoice is the only synthesis backend today, wired directly into `core/tts_eng
 
 ### Docker support
 
-Right now Auris only runs from a project-local `.venv` via the installer scripts. A `Dockerfile` (plus a `docker-compose.yml` for the common case of mounting a model directory and a data volume) would let users skip Python/CUDA setup entirely:
+Right now Auris only runs from a project-local `.venv` via `uv sync`. A `Dockerfile` (plus a `docker-compose.yml` for the common case of mounting a model directory and a data volume) would let users skip Python/CUDA setup entirely:
 
-- **Base images:** a CPU image and a CUDA-enabled image (matching the installer's existing CUDA/CPU detection), so GPU inference still works via `--gpus all` / `nvidia-container-toolkit`.
+- **Base images:** a CPU image and a CUDA-enabled image (matching the `cpu` and `cu128` extras), so GPU inference still works via `--gpus all` / `nvidia-container-toolkit`.
 - **Volumes:** `reader/data` (library + settings) and the OmniVoice model directory mounted from the host, so the container stays disposable while books, progress, and downloaded weights persist.
 - **Networking:** the Flask dev server binds to `127.0.0.1` today; the container image would need to bind `0.0.0.0` behind an explicit opt-in flag, since this app has no auth layer and isn't meant to be exposed beyond localhost by default.
 - **Model download inside the container:** the auto-download setting (Settings → OmniVoice Model) is the natural fit here — point a fresh container at an empty model volume and let it fetch weights on first boot instead of requiring a pre-populated mount.
