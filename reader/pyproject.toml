@@ -23,7 +23,7 @@ dependencies = [
     # The app
     "flask>=3.0",
     "ebooklib>=0.18",
-    "pymupdf>=1.24",            # imported as: import fitz
+    "pymupdf>=1.24",            # imported as: import pymupdf
     "spacy>=3.7",
     "en-core-web-sm",           # spaCy's English model (character detection); see [tool.uv.sources]
 ]

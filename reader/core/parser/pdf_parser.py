@@ -2,17 +2,17 @@ import re
 import base64
 
 try:
-    import fitz  # PyMuPDF
-    FITZ_OK = True
+    import pymupdf
+    PYMUPDF_OK = True
 except ImportError:
-    FITZ_OK = False
+    PYMUPDF_OK = False
 
 
 def parse(file_path):
-    if not FITZ_OK:
-        raise ImportError("PyMuPDF is not installed. Run: pip install pymupdf")
+    if not PYMUPDF_OK:
+        raise ImportError("PyMuPDF is not installed. Run: uv sync")
 
-    doc = fitz.open(file_path)
+    doc = pymupdf.open(file_path)
 
     title = doc.metadata.get('title', '') or 'Unknown Title'
     author = doc.metadata.get('author', '') or 'Unknown Author'
@@ -21,7 +21,7 @@ def parse(file_path):
     cover_b64 = None
     try:
         page = doc[0]
-        pix = page.get_pixmap(matrix=fitz.Matrix(0.5, 0.5))
+        pix = page.get_pixmap(matrix=pymupdf.Matrix(0.5, 0.5))
         cover_b64 = base64.b64encode(pix.tobytes('png')).decode()
     except Exception:
         pass
