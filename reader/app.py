@@ -1572,6 +1572,10 @@ def corrections_page(book_id):
     return render_template('corrections.html', book=dict(book))
 
 
+CONTEXT_SENTENCES = 3       # sentences shown on each side of an excerpt
+MAX_EXCERPT_HITS = 5        # the most of a character's sentences shown together in one excerpt
+
+
 def _canonical_character(book_id: int, char_id: int):
     """The character row for char_id, or the one it is merged into (segments carry that name); None if unknown."""
     with get_conn() as conn:
@@ -1593,18 +1597,14 @@ def character_excerpt_chapters(book_id, char_id):
         chapters = conn.execute(
             'SELECT id, title, enrichment_version FROM chapters WHERE book_id=? ORDER BY order_num',
             (book_id,)).fetchall()
-        built = {r[0] for r in conn.execute(
-            'SELECT DISTINCT chapter_id FROM tts_segments WHERE book_id=?', (book_id,))}
-        counts = dict(conn.execute(
-            'SELECT chapter_id, COUNT(*) FROM tts_segments WHERE book_id=? AND character_name=? GROUP BY chapter_id',
-            (book_id, char['name'])).fetchall())
+        counts = dict(conn.execute(           # a chapter with no stored segments is not built yet
+            'SELECT chapter_id, SUM(character_name=?) FROM tts_segments WHERE book_id=? GROUP BY chapter_id',
+            (char['name'], book_id)).fetchall())
     out = []
     for ch in chapters:
-        is_built = ch['id'] in built and ch['enrichment_version'] == ENRICHMENT_VERSION
-        if not is_built:
-            out.append({'id': ch['id'], 'title': ch['title'], 'count': None})
-        elif ch['id'] in counts:
-            out.append({'id': ch['id'], 'title': ch['title'], 'count': counts[ch['id']]})
+        count = counts.get(ch['id']) if ch['enrichment_version'] == ENRICHMENT_VERSION else None
+        if count is None or count:              # not built (unknown), or built and has some
+            out.append({'id': ch['id'], 'title': ch['title'], 'count': count})
     return jsonify({'character': {'id': char['id'], 'name': char['name']}, 'chapters': out})
 
 
@@ -1620,14 +1620,10 @@ def character_chapter_excerpts(book_id, char_id, chapter_id):
     return jsonify(_excerpt_groups(rows, char['name']))
 
 
-CONTEXT_SENTENCES = 3       # sentences shown on each side of an excerpt
-MAX_EXCERPT_HITS = 5        # the most of a character's sentences shown together in one excerpt
-
-
 def _excerpt_groups(rows, name: str) -> list[dict]:
     """A character's sentences in a chapter as excerpts. Sentences close enough that their context
     would overlap (and so be repeated) are shown together as one excerpt, up to MAX_EXCERPT_HITS of them. An excerpt
-    keeps the chapter's paragraphs: {segment_index, overridden, paragraphs: [[{text, anchor, hit, overridden}]]}."""
+    keeps the chapter's paragraphs: {segment_index, paragraphs: [[{text, anchor, hit, overridden}]]}."""
     hits = [i for i, r in enumerate(rows) if r['character_name'] == name]
     groups = []
     for i in hits:
@@ -1653,11 +1649,10 @@ def character_page(book_id, char_id):
     book = _load_book(book_id)
     if not book:
         return 'Book not found', 404
-    with get_conn() as conn:
-        char = conn.execute('SELECT id, name FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
+    char = _canonical_character(book_id, char_id)
     if not char:
         return 'Character not found', 404
-    return render_template('character.html', book=dict(book), character=dict(char))
+    return render_template('character.html', book=dict(book), character=dict(char), other_speaker=OTHER_SPEAKER)
 
 
 def _store_segments(book_id, chapter_id, segs):

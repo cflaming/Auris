@@ -1,14 +1,14 @@
 // A character's page: the sentences attributed to them, by chapter, each with a way to change the speaker.
 
 const BOOK = window.BOOK_ID;
-const OTHER_SPEAKER = 'Other speaker';
 let character = null;
 let speakerNames = [];
+const speakersLoaded = fetch(`/api/books/${BOOK}/characters`).then(r => r.json()).then(chars => { speakerNames = chars.map(c => c.name); });
 
 const list = document.getElementById('excerpt-list');
 
 function speakerSelect(selected) {
-  const options = [['', 'Narrator'], ...speakerNames.map(n => [n, n]), [OTHER_SPEAKER, OTHER_SPEAKER]];
+  const options = [['', 'Narrator'], ...speakerNames.map(n => [n, n]), [window.OTHER_SPEAKER, window.OTHER_SPEAKER]];
   return `<select class="text-input" data-speaker aria-label="Speaker">${options.map(([value, label]) =>
     `<option value="${escapeHtml(value)}" ${value === selected ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select>`;
 }
@@ -16,14 +16,14 @@ function speakerSelect(selected) {
 // An excerpt can hold several of the character's sentences (close together); they are marked in the passage.
 function cardFor(chapterId, item) {
   const hits = item.paragraphs.flat().filter(x => x.hit);
+  const many = hits.length > 1;
   const open = `<a class="btn btn-sm btn-ghost" href="${readerUrl(BOOK, chapterId, item.segment_index)}">Open in reader</a>`;
-  const hint = hits.length > 1 ? '<span class="excerpt-note">Click a marked sentence to leave it out of a change</span>' : '';
+  const hint = many ? '<span class="excerpt-note">Click a marked sentence to leave it out of a change</span>' : '';
   const set = hits.some(x => x.overridden) ? '<span class="excerpt-note">some set by you</span>' : '';
-  const html = excerptCard({
-    paragraphs: item.paragraphs, meta: [hint, set].filter(Boolean).join(' '),
-    actions: `${open}<label class="excerpt-note">${hits.length > 1 ? 'Speaker for marked sentences' : 'Speaker'} ${speakerSelect(character.name)}</label>`,
+  return excerptCard({
+    paragraphs: item.paragraphs, meta: [hint, set].filter(Boolean).join(' '), cls: many ? 'multi' : '',
+    actions: `${open}<label class="excerpt-note">${many ? 'Speaker for marked sentences' : 'Speaker'} ${speakerSelect(character.name)}</label>`,
   });
-  return html.replace('class="excerpt"', `class="excerpt${hits.length > 1 ? ' multi' : ''}" data-chapter="${chapterId}"`);
 }
 
 // Chapters are listed up front; a chapter's sentences are fetched when it is first opened.
@@ -42,7 +42,10 @@ async function fillChapter(group) {
   if (group.dataset.loaded) return;
   group.dataset.loaded = '1';
   const chapterId = +group.dataset.chapter;
-  const items = await fetch(`/api/books/${BOOK}/characters/${window.CHARACTER_ID}/excerpts/${chapterId}`).then(r => r.json());
+  const r = await fetch(`/api/books/${BOOK}/characters/${window.CHARACTER_ID}/excerpts/${chapterId}`);
+  if (!r.ok) { delete group.dataset.loaded; document.getElementById('summary').textContent = 'Could not load that chapter'; return; }
+  const items = await r.json();
+  await speakersLoaded;                      // the speaker menus need the names
   if (!items.length) { group.remove(); updateSummary(); return; }       // it turned out not to have any of their lines
   group.querySelector('[data-count]').textContent = items.reduce((n, e) => n + e.paragraphs.flat().filter(x => x.hit).length, 0);
   group.insertAdjacentHTML('beforeend', items.map(item => cardFor(chapterId, item)).join(''));
@@ -76,7 +79,7 @@ function applyFilter() {
   list.querySelectorAll('.chapter-group').forEach(group => {
     const titleMatches = group.querySelector('summary').textContent.toLowerCase().includes(q);
     const cards = [...group.querySelectorAll('.excerpt')];
-    cards.forEach(el => { el.hidden = !!q && !titleMatches && !el.querySelector('.passage-para').parentElement.textContent.toLowerCase().includes(q); });
+    cards.forEach(el => { el.hidden = !!q && !titleMatches && ![...el.querySelectorAll('.passage-para')].map(p => p.textContent).join(' ').toLowerCase().includes(q); });
     group.hidden = !!q && !titleMatches && cards.every(el => el.hidden);   // chapters not opened yet have no cards to match
   });
 }
@@ -87,7 +90,7 @@ async function changeSpeaker(select) {
   const hits = [...card.querySelectorAll('.hit:not(.off)')];
   if (!hits.length) return;
   select.disabled = true;
-  const r = await fetch(`/api/books/${BOOK}/chapters/${card.dataset.chapter}/speaker`, {
+  const r = await fetch(`/api/books/${BOOK}/chapters/${card.closest('.chapter-group').dataset.chapter}/speaker`, {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ anchors: hits.map(h => h.dataset.anchor), character: value || null }),
   });
@@ -112,11 +115,4 @@ list.addEventListener('click', e => {
 list.addEventListener('change', e => { if (e.target.matches('[data-speaker]')) changeSpeaker(e.target); });
 document.getElementById('filter').addEventListener('input', applyFilter);
 
-(async () => {
-  const chars = await fetch(`/api/books/${BOOK}/characters`).then(r => r.json());
-  speakerNames = chars.map(c => c.name);
-  character = chars.find(c => c.id === window.CHARACTER_ID);
-  const target = character && chars.find(c => c.id === character.alias_of);
-  if (target) character = target;                 // a merged character's lines are listed under who they are merged into
-  await load();
-})();
+load();
