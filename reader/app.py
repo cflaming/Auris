@@ -3,8 +3,6 @@ Offline Ebook Reader — Flask application.
 """
 
 import base64
-from collections import Counter, defaultdict
-from itertools import groupby
 import email.utils
 import json
 import logging
@@ -15,19 +13,27 @@ import time
 import uuid
 import wave
 import xml.etree.ElementTree as ET
+from collections import Counter, defaultdict
+from itertools import groupby
 
 from flask import (
-    Flask, Response, abort, jsonify, make_response, render_template, request,
+    Flask,
+    Response,
+    abort,
+    jsonify,
+    make_response,
+    render_template,
+    request,
     send_file,
 )
 from werkzeug.utils import secure_filename
 
-from core import paths
-from core.database import init_db, get_conn
-from core.base_engine import SAMPLE_RATE
-from core.engine_manager import EngineManager
 from core import characters as char_module
-from core import enrichment, exporter, structure, settings as app_settings
+from core import enrichment, exporter, paths, structure
+from core import settings as app_settings
+from core.base_engine import SAMPLE_RATE
+from core.database import get_conn, init_db
+from core.engine_manager import EngineManager
 from core.enrichment import ENRICHMENT_VERSION, OTHER_SPEAKER
 from core.parser import epub_parser, pdf_parser, txt_parser
 
@@ -53,6 +59,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Pre-rendered chapter audio (full-chapter fMP4 for smooth mobile playback)
 from core.base_engine import AUDIO_CACHE_DIR as _ACD
+
 _CHAPTER_RENDER_DIR = os.path.join(_ACD, 'chapter_renders')
 os.makedirs(_CHAPTER_RENDER_DIR, exist_ok=True)
 
@@ -98,6 +105,7 @@ _export_jobs: dict = {}
 _chapter_prerender_jobs: dict = {}  # (book_id, chapter_id) -> job_id for in-progress renders
 
 import queue as _queue
+
 _prerender_queue: _queue.Queue = _queue.Queue()
 
 def _prerender_worker():
@@ -112,6 +120,7 @@ threading.Thread(target=_prerender_worker, daemon=True, name='prerender-worker')
 
 # ── Seg-mode TTS activity tracker ────────────────────────────────────────────
 from collections import deque as _deque
+
 _tts_active: dict = {}
 _tts_recent = _deque(maxlen=60)
 _tts_lock = threading.Lock()
@@ -452,6 +461,7 @@ def debug_orphans_page():
 
 def _scan_orphans() -> dict:
     import re
+
     from core.base_engine import AUDIO_CACHE_DIR
 
     # --- known cache keys from DB ---
@@ -494,7 +504,6 @@ def _scan_orphans() -> dict:
     # --- orphan chapter renders: b{book}_c{chapter}.* with unknown ids ---
     render_pattern = re.compile(r'^b(\d+)_c(\d+)[._]')
     orphan_renders = []
-    seen_render_keys = set()
     for fname in os.listdir(_CHAPTER_RENDER_DIR):
         m = render_pattern.match(fname)
         if not m:
@@ -1642,7 +1651,7 @@ def _run_chapter_prerender(job_id: str, book_id: int, chapter_id: int):
         _ensure_audio_for_chapter(book_id, chapter_id, segs, job)
 
         job['message'] = 'Merging audio...'
-        from core.exporter import _merge_wavs, build_timeline, SAMPLE_RATE
+        from core.exporter import SAMPLE_RATE, _merge_wavs, build_timeline
 
         timeline = build_timeline(segs)
         if not timeline:

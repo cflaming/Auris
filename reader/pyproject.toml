@@ -38,6 +38,7 @@ cu128 = ["torch", "torchaudio"]     # NVIDIA, CUDA 12.8
 dev = [
     "pytest>=8.0",
     "pytest-playwright>=0.5",   # browser tests; then: uv run playwright install chromium
+    "ruff>=0.17.5",
 ]
 
 [tool.uv]
@@ -65,3 +66,21 @@ explicit = true
 name = "pytorch-cu128"
 url = "https://download.pytorch.org/whl/cu128"
 explicit = true
+
+[tool.ruff]
+line-length = 160                   # a relaxed width: about twice the usual 80
+extend-exclude = [".dev", "data", "uploads", "exports", "audio_cache"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E701", "E702",     # `if x: return` and `a; b` one-liners are this codebase's style
+    "E731",             # a lambda bound to a name is fine for small helpers
+    "B905",             # zip() without strict=
+    "UP031",            # %-formatting in tests
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app.py" = ["E402"]                 # some imports follow setup code on purpose
+"core/enrichment.py" = ["E501"]     # long word lists
+"core/exporter.py" = ["E501"]

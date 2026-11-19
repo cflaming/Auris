@@ -144,7 +144,7 @@ def _do_download(repo_id: str, dest_dir: str, hf_endpoint: str):
         if hf_endpoint:
             os.environ['HF_ENDPOINT'] = hf_endpoint
 
-        from huggingface_hub import list_repo_files, hf_hub_download
+        from huggingface_hub import hf_hub_download, list_repo_files
 
         _set_dl('downloading', 2, 'Listing repository files…', dest_dir)
 

@@ -36,7 +36,7 @@ import sys
 import time
 from pathlib import Path
 
-from core.layout import APP_DIR, FILES, layout, resolve_root     # pure: safe to import before the data folder is switched
+from core.layout import APP_DIR, FILES, layout, resolve_root  # pure: safe to import before the data folder is switched
 
 DEFAULT_SCRATCH = APP_DIR / ".dev"
 MARKER = ".auris-dev.json"          # present only in folders this script created

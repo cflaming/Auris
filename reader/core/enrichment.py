@@ -809,7 +809,7 @@ def _segment_speed(sentence: str, is_dialogue: bool, scene_speed: float, tag: st
 def _anchor(prev: str, text: str, seen: dict) -> str:
     """Stable id for a sentence: hash of it and the sentence before it (so repeated
     lines like "No." stay distinct), plus how many identical pairs came earlier."""
-    key = hashlib.sha1(f"{prev}\n{text}".encode("utf-8")).hexdigest()[:12]
+    key = hashlib.sha1(f"{prev}\n{text}".encode()).hexdigest()[:12]
     n = seen[key] = seen.get(key, -1) + 1
     return f"{key}:{n}"
 

@@ -68,7 +68,7 @@ def _should_skip_section(title, content, started_story):
 
 
 def parse(file_path):
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+    with open(file_path, encoding='utf-8', errors='replace') as f:
         raw = f.read()
 
     lines = raw.splitlines()

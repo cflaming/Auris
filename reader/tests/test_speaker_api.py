@@ -1,8 +1,8 @@
 """Speaker corrections and character management through the HTTP API."""
 
-from core.database import get_conn
 import pytest
 
+from core.database import get_conn
 from tests.demo_story import AMBIGUOUS_REPEAT, CHAPTER_ONE
 from tests.helpers import all_by_text, by_text, spoken
 

@@ -9,7 +9,7 @@ deliberate and a little fragile, which is why dev_server.py refuses to start unl
 below, and the ones the modules actually use, turn out to be inside its scratch folder.
 """
 
-from core.layout import APP_DIR, layout, resolve_root
+from core.layout import APP_DIR, layout, resolve_root  # noqa: F401  (APP_DIR is read as paths.APP_DIR)
 
 DATA_ROOT = resolve_root()
 LOCATIONS = layout(DATA_ROOT)          # all of the above, by name

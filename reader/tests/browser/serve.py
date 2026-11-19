@@ -38,11 +38,12 @@ def main():
     os.environ["AURIS_DATA_DIR"] = args.data_dir          # before anything from core/ or app is imported
     sys.path.insert(0, str(APP_DIR))
     import numpy as np
+    from flask import jsonify, request
+
     import app as app_mod
     from core import database as db
-    from core.base_engine import AUDIO_CACHE_DIR, BaseEngine, SAMPLE_RATE
+    from core.base_engine import AUDIO_CACHE_DIR, SAMPLE_RATE, BaseEngine
     from core.database import get_conn
-    from flask import jsonify, request
     from tests.demo_story import CHARACTERS
     from tests.helpers import seed_book
 

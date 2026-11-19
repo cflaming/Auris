@@ -16,10 +16,10 @@ Subtitle formats:
 """
 
 import io
-import os
-import zipfile
 import logging
+import os
 import shutil
+import zipfile
 
 import numpy as np
 import soundfile as sf

@@ -1,7 +1,7 @@
-import re
 import hashlib
-import random
 import logging
+import random
+import re
 from collections import Counter
 
 log = logging.getLogger(__name__)
@@ -54,13 +54,11 @@ MALE_NAMES = {
     'joshua','kevin','brian','george','edward','ronald','timothy','jason','jeffrey','ryan',
     'jacob','gary','nicholas','eric','jonathan','stephen','larry','justin','scott','brandon',
     'benjamin','samuel','raymond','gregory','frank','alexander','patrick','jack','dennis','jerry',
-    'tyler','aaron','henry','jose','adam','douglas','nathan','peter','zachary','kyle','henry',
-    'walter','arthur','carl','albert','clarence','ralph','roy','eugene','wayne','louis',
+    'tyler','aaron','henry','jose','adam','douglas','nathan','peter','zachary','kyle','walter','arthur','carl','albert','clarence','ralph','roy','eugene','wayne','louis',
     'harry','liam','noah','oliver','elijah','lucas','mason','ethan','aiden','logan','caleb',
     'sebastian','julian','ezra','miles','finn','leo','theo','max','felix','hugo','oscar',
-    'edgar','ernest','victor','harold','claude','leon','otto','fred','alfred','edgar',
-    'gilbert','roland','benedict','gabriel','raphael','dominic','marcus','julius',
-    'sherlock','watson','holmes','darcy','heathcliff','rochester','pip','oliver','fagin',
+    'edgar','ernest','victor','harold','claude','leon','otto','fred','alfred','gilbert','roland','benedict','gabriel','raphael','dominic','marcus','julius',
+    'sherlock','watson','holmes','darcy','heathcliff','rochester','pip','fagin',
     'tom','huck','atticus','gatsby','dorian','basil','doyle','dickens','austen',
 }
 
@@ -73,11 +71,10 @@ FEMALE_NAMES = {
     'diane','julie','joyce','victoria','kelly','christina','joan','evelyn','lauren','judith',
     'olivia','sophia','isabella','ava','mia','charlotte','amelia','harper','abigail','ella',
     'scarlett','grace','lily','aria','chloe','penelope','layla','riley','zoey','nora','luna',
-    'eleanor','violet','aurora','stella','hazel','alice','claire','audrey','ruby','alice',
-    'jane','anne','margaret','dorothy','edith','mabel','ethel','florence','beatrice','cecily',
-    'esme','clarice','eliza','lydia','catherine','marianne','elinor','emma','harriet','fanny',
-    'hester','hattie','nell','daisy','molly','flora','rose','iris','vera','grace','pearl',
-    'hermione','ginny','luna','lavender','parvati','tonks','narcissa','bellatrix',
+    'eleanor','violet','aurora','stella','hazel','alice','claire','audrey','ruby','jane','anne','edith','mabel','ethel','florence','beatrice','cecily',
+    'esme','clarice','eliza','lydia','marianne','elinor','harriet','fanny',
+    'hester','hattie','nell','daisy','molly','flora','rose','iris','vera','pearl',
+    'hermione','ginny','lavender','parvati','tonks','narcissa','bellatrix',
     'katniss','primrose','effie','johanna','clove','glimmer','rue',
 }
 
