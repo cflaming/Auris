@@ -192,7 +192,8 @@ def test_audio_from_another_engine_does_not_count_as_cached(make_book, segments,
     wav.write_bytes(b"x")
     with get_conn() as conn:
         conn.execute(
-            "UPDATE tts_segments SET audio_path=?, duration_sec=1.0, engine_tag='other:9' WHERE book_id=? AND segment_index=1",
+            "UPDATE tts_segments SET audio_path=?, duration_sec=1.0, engine_tag='other:9' "
+            "WHERE book_id=? AND segment_index=1",
             (str(wav), book.id),
         )
     assert not segments(book)[1]["has_audio"]
@@ -235,7 +236,8 @@ def test_assign_a_sentence_to_the_new_character(make_book, segments, correct, cl
     assert by_text(segments(book), '"Then when?"')["character_name"] == "Evelyn"
 
 
-def test_other_speaker_is_a_label_apart_from_narration_in_the_narrators_voice(make_book, segments, correct, client, app_module):
+def test_other_speaker_is_a_label_apart_from_narration_in_the_narrators_voice(
+        make_book, segments, correct, client, app_module):
     book = make_book()
     target = by_text(segments(book), '"Then when?"')
     assert correct(book, [target["anchor"]], "Other speaker").status_code == 200
@@ -266,7 +268,8 @@ def test_hand_added_characters_at_zero_are_backfilled_on_startup(make_book, clie
         conn.execute("UPDATE characters SET frequency=0 WHERE book_id=? AND name='Dean'", (book.id,))
     app_module._backfill_character_frequencies()
     with get_conn() as conn:
-        freq = conn.execute("SELECT frequency FROM characters WHERE book_id=? AND name='Dean'", (book.id,)).fetchone()[0]
+        freq = conn.execute(
+            "SELECT frequency FROM characters WHERE book_id=? AND name='Dean'", (book.id,)).fetchone()[0]
     assert freq == CHAPTER_ONE.count("Dean") > 0
 
 

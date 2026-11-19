@@ -90,7 +90,8 @@ def probe(prod, tmp_path):
 
 
 def test_a_hardlink_pretending_to_be_a_clone_is_rejected(prod, tmp_path, fake_clone):
-    fake_clone("ln")                                                        # `ln src dst`: a second name for the same file
+    # `ln src dst`: a second name for the same file
+    fake_clone("ln")
     ok, why = probe(prod, tmp_path)
     assert not ok and "same file" in why
 

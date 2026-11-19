@@ -82,9 +82,11 @@ def clone_check(prod_layout: dict, dev: Path) -> tuple[bool, str]:
     real, a, b = dev / ".clone-probe-real", dev / ".clone-probe-a", dev / ".clone-probe-b"
     try:
         if not _run_clone(cmd, sample, real):
-            return False, "your data cannot be cloned into the scratch folder (different volume, or no filesystem support)"
+            return False, ("your data cannot be cloned into the scratch folder "
+                           "(different volume, or no filesystem support)")
 
-        block = os.urandom(1024 * 1024)                                    # random, so nothing can compress or dedupe it
+        # random, so nothing can compress or dedupe it
+        block = os.urandom(1024 * 1024)
         with open(a, "wb") as f:
             for _ in range(PROBE_BYTES // len(block)):
                 f.write(block)
@@ -147,7 +149,8 @@ def check_locations(prod: Path, dev: Path):
     if dev == prod:
         raise SystemExit(f"Refusing to use the real data folder ({prod}) as the scratch folder.")
     for name, path in layout(prod).items():
-        folder = path.parent if name in FILES else path                  # the folder holding a file, or the folder itself
+        # the folder holding a file, or the folder itself
+        folder = path.parent if name in FILES else path
         if dev == folder or folder in dev.parents:
             raise SystemExit(f"The scratch folder {dev} is inside the real data folder {folder}.")
 
@@ -194,7 +197,8 @@ def check_runtime_paths(scratch: Path):
         "audio cache in use": core.base_engine.AUDIO_CACHE_DIR, "uploads in use": app.UPLOAD_DIR,
         "exports in use": core.exporter.EXPORTS_DIR, "chapter renders in use": app._CHAPTER_RENDER_DIR,
     }
-    outside = {name: str(path) for name, path in in_use.items() if scratch.resolve() not in Path(path).resolve().parents}
+    outside = {name: str(path) for name, path in in_use.items()
+               if scratch.resolve() not in Path(path).resolve().parents}
     if outside:
         raise SystemExit("Not starting: the app is not using the scratch folder for: "
                          + ", ".join(f"{k} ({v})" for k, v in outside.items()))
@@ -231,7 +235,10 @@ def build_scratch(prod: Path, dev: Path, force_copy: bool = False) -> dict:
 def ensure_scratch(prod: Path, dev: Path, refresh: bool = False, force_copy: bool = False) -> dict:
     """The scratch folder's info. An existing copy is reused; either way it is checked to be
     independent of the real data before it is handed back."""
-    info = build_scratch(prod, dev, force_copy) if refresh or not (dev / MARKER).exists() else json.loads((dev / MARKER).read_text())
+    if refresh or not (dev / MARKER).exists():
+        info = build_scratch(prod, dev, force_copy)
+    else:
+        info = json.loads((dev / MARKER).read_text())
     verify_independent(dev)
     return info
 
@@ -250,10 +257,12 @@ def main():
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--refresh", action="store_true", help="discard the scratch copy and copy your data again")
     parser.add_argument("--real-engine", action="store_true", help="use the real TTS engine (default: TTS disabled)")
-    parser.add_argument("--dir", type=Path, default=DEFAULT_SCRATCH, help=f"scratch folder (default: {DEFAULT_SCRATCH})")
+    parser.add_argument("--dir", type=Path, default=DEFAULT_SCRATCH,
+                        help=f"scratch folder (default: {DEFAULT_SCRATCH})")
     args = parser.parse_args()
 
-    prod, scratch = resolve_root(), args.dir.resolve()        # read before AURIS_DATA_DIR is pointed at the scratch folder
+    # read before AURIS_DATA_DIR is pointed at the scratch folder
+    prod, scratch = resolve_root(), args.dir.resolve()
     info = ensure_scratch(prod, scratch, refresh=args.refresh)
 
     os.environ["AURIS_DATA_DIR"] = str(scratch)      # before anything from core/ or app is imported
@@ -263,7 +272,8 @@ def main():
 
     if not args.real_engine:
         from core.null_engine import NullEngine
-        app.tts = NullEngine(app.tts.engine_name, app.tts.cache_tag, state="loading",   # same cache tag: copied audio stays current
+        # same cache tag: copied audio stays current
+        app.tts = NullEngine(app.tts.engine_name, app.tts.cache_tag, state="loading",
                              message="dev server: TTS disabled (--real-engine to enable)")
 
     how = ", ".join(f"{k}: {v}" for k, v in info["modes"].items()) or "nothing to copy"

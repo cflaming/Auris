@@ -143,7 +143,8 @@ def pytest_terminal_summary(terminalreporter):
     REPORT.write_text(json.dumps(_RECORDS, indent=2))
     tr = terminalreporter
     tr.section("browser cost per test")
-    cols = ("requests", "bytes_downloaded", "tts_encodes", "ffmpeg_conversions", "script_ms", "main_thread_ms", "layouts")
+    cols = ("requests", "bytes_downloaded", "tts_encodes", "ffmpeg_conversions",
+            "script_ms", "main_thread_ms", "layouts")
     tr.write_line(f"{'test':58}" + "".join(f"{c[:11]:>12}" for c in cols))
     for r in _RECORDS:
         tr.write_line(f"{r['test'][:57]:58}" + "".join(f"{r[c]:>12}" for c in cols))

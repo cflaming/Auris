@@ -222,6 +222,14 @@ def _audio_url(cache_key: str) -> str:
     return f'/api/audio/{cache_key}'
 
 
+def _record_segment_audio(conn, seg_id, audio_path, duration_sec, cache_key, generation_sec):
+    """Store the audio made for a segment (by the engine now running) on its row."""
+    conn.execute(
+        'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
+        (audio_path, duration_sec, cache_key, generation_sec, tts.cache_tag, seg_id)
+    )
+
+
 def _segment_audio_current(seg: dict) -> bool:
     """True if the segment's stored audio exists and was made by the active engine/version."""
     return bool(seg.get('audio_path') and seg.get('duration_sec')
@@ -647,7 +655,8 @@ def import_book():
 
     with get_conn() as conn:
         cur = conn.execute(
-            'INSERT INTO books (title, author, file_path, file_type, cover_b64, language, single_narrator_mode, total_chapters) '
+            'INSERT INTO books (title, author, file_path, file_type, cover_b64, language, '
+            'single_narrator_mode, total_chapters) '
             'VALUES (?,?,?,?,?,?,?,?)',
             (data['title'], data['author'], dest, ext,
              data.get('cover_b64'), data.get('language', 'en'),
@@ -868,7 +877,8 @@ def delete_character(book_id, char_id):
             return jsonify({'error': 'Character not found'}), 404
         assigned = conn.execute('SELECT COUNT(*) FROM segment_speakers WHERE book_id=? AND character_name=?',
                                 (book_id, char['name'])).fetchone()[0]
-        has_merged = conn.execute('SELECT 1 FROM characters WHERE book_id=? AND alias_of=?', (book_id, char_id)).fetchone()
+        has_merged = conn.execute(
+            'SELECT 1 FROM characters WHERE book_id=? AND alias_of=?', (book_id, char_id)).fetchone()
         blocker = _delete_blocker(char, assigned, bool(has_merged))
         if blocker:
             return jsonify({'error': blocker}), 409
@@ -1243,10 +1253,7 @@ def _ensure_section_break_audio(seg) -> str:
     _silence_file_ready = True
     if seg.get('cache_key') != _SILENCE_CACHE_KEY:
         with get_conn() as conn:
-            conn.execute(
-                'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
-                (wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, 0.0, tts.cache_tag, seg['id'])
-            )
+            _record_segment_audio(conn, seg['id'], wav_path, _SILENCE_DURATION, _SILENCE_CACHE_KEY, 0.0)
     return wav_path
 
 
@@ -1343,10 +1350,8 @@ def tts_generate():
         return jsonify({'error': str(e)}), 503
 
     with get_conn() as conn:
-        conn.execute(
-            'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
-            (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], tts.cache_tag, seg['id'])
-        )
+        _record_segment_audio(conn, seg['id'], result['audio_path'], result['duration_sec'],
+                              result['cache_key'], result['generation_sec'])
 
     _tts_finish(rid, cached=result['cache_hit'], duration_sec=result['duration_sec'])
     return jsonify({
@@ -1913,10 +1918,8 @@ def _ensure_audio_for_chapter(book_id: int, chapter_id: int, segs: list[dict], j
         else:
             try:
                 with get_conn() as conn:
-                    conn.execute(
-                        'UPDATE tts_segments SET audio_path=?, duration_sec=?, cache_key=?, generation_sec=?, engine_tag=? WHERE id=?',
-                        (result['audio_path'], result['duration_sec'], result['cache_key'], result['generation_sec'], tts.cache_tag, seg['id'])
-                    )
+                    _record_segment_audio(conn, seg['id'], result['audio_path'], result['duration_sec'],
+                                          result['cache_key'], result['generation_sec'])
                 seg['audio_path'] = result['audio_path']
                 seg['duration_sec'] = result['duration_sec']
                 seg['cache_key'] = result['cache_key']
@@ -2294,7 +2297,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default=os.environ.get('AURIS_HOST', '127.0.0.1'))
     parser.add_argument('--port', type=int, default=int(os.environ.get('AURIS_PORT', 7860)))
-    parser.add_argument('--debug', action='store_true', default=os.environ.get('AURIS_DEBUG', '').lower() in ('1', 'true'))
+    parser.add_argument('--debug', action='store_true',
+                        default=os.environ.get('AURIS_DEBUG', '').lower() in ('1', 'true'))
     args = parser.parse_args()
     display_host = '127.0.0.1' if args.host == '0.0.0.0' else args.host
     print(f" * Open your browser at: http://{display_host}:{args.port}")

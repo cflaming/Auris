@@ -33,7 +33,8 @@ def test_ties_go_to_the_alphabetically_first_name(cast):
 
 
 def test_a_merged_character_stays_right_behind_the_one_it_is_merged_into(cast):
-    # Dee alone (30) would sit below Carol (35); merged into Dean (group total 120, still below Amy) it stays beside him.
+    # Dee alone (30) would sit below Carol (35); merged into Dean (group total 120, still below Amy)
+    # it stays beside him.
     book = cast({"Amy": 150, "Dean": 90, "Carol": 35, "Dee": 30}, merged={"Dee": "Dean"})
     assert book.names() == ["Amy", "Dean", "Dee", "Carol"]
 
@@ -56,7 +57,8 @@ def test_the_one_merged_into_always_comes_first_even_if_the_other_is_more_freque
 
 
 def test_several_merged_characters_follow_in_frequency_order(cast):
-    book = cast({"Dean": 10, "Dee": 5, "Deanna": 50, "Dino": 20}, merged={"Dee": "Dean", "Deanna": "Dean", "Dino": "Dean"})
+    book = cast({"Dean": 10, "Dee": 5, "Deanna": 50, "Dino": 20},
+                merged={"Dee": "Dean", "Deanna": "Dean", "Dino": "Dean"})
     assert book.names() == ["Dean", "Deanna", "Dino", "Dee"]
 
 
@@ -76,7 +78,8 @@ def test_a_chain_of_merges_does_not_form_a_group(cast):
     # The app keeps merges one level deep; if data ever has a chain, nothing is dragged into a wrong group.
     book = cast({"Amy": 60, "Bea": 50, "Cat": 40}, merged={"Bea": "Cat", "Amy": "Bea"})
     assert sorted(book.names()) == ["Amy", "Bea", "Cat"]              # every character is still listed exactly once
-    assert {c["name"]: c["group_total"] for c in book.listing()}["Amy"] == 60       # Amy, merged into a merged one, stands alone
+    # Amy, merged into a merged one, stands alone
+    assert {c["name"]: c["group_total"] for c in book.listing()}["Amy"] == 60
 
 
 def test_merging_through_the_api_reorders_the_list(cast, client):
@@ -84,7 +87,8 @@ def test_merging_through_the_api_reorders_the_list(cast, client):
     assert book.names() == ["Amy", "Carol", "Dean", "Dee"]
     ids = {c["name"]: c["id"] for c in book.listing()}
 
-    assert client.put(f"/api/books/{book.id}/characters/{ids['Dee']}", json={"alias_of": ids["Dean"]}).status_code == 200
+    merge = client.put(f"/api/books/{book.id}/characters/{ids['Dee']}", json={"alias_of": ids["Dean"]})
+    assert merge.status_code == 200
     assert book.names() == ["Dean", "Dee", "Amy", "Carol"]
 
     client.put(f"/api/books/{book.id}/characters/{ids['Dee']}", json={"alias_of": None})          # unmerge
@@ -102,4 +106,5 @@ def test_each_character_reports_when_it_was_last_assigned_by_hand(cast, client):
             conn.execute("INSERT INTO segment_speakers (book_id, chapter_id, anchor, character_name, updated_at) "
                          "VALUES (?,?,?,?,?)", (book.id, chapter_id, anchor, name, when))
     last = {c["name"]: c["last_override_at"] for c in book.listing()}
-    assert last == {"Dean": "2026-01-03 10:00:00", "Amy": "2026-01-02 10:00:00", "Carol": None}   # newest per character; narrator overrides ignored
+    # newest per character; narrator overrides ignored
+    assert last == {"Dean": "2026-01-03 10:00:00", "Amy": "2026-01-02 10:00:00", "Carol": None}

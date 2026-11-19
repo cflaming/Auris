@@ -89,7 +89,8 @@ def test_the_list_shows_detected_and_corrected_speakers_in_reading_order(make_bo
     correct(book, [by_text(segments(book, 1), '"Ready,"')["anchor"]], "Dean", chapter_index=1)
 
     items = corrections(book)
-    assert [(c["chapter_title"], c["text"], c["detected_speaker"], c["corrected_speaker"], c["status"]) for c in items] == [
+    fields = ("chapter_title", "text", "detected_speaker", "corrected_speaker", "status")
+    assert [tuple(c[f] for f in fields) for c in items] == [
         ("Chapter 1", '"We should leave before dawn,"', "Amy", "Dean", "active"),
         ("Chapter 1", THEN_WHEN, "Amy", None, "active"),                    # corrected to the narrator
         ("Chapter 2", '"Ready,"', "Amy", "Dean", "active"),
@@ -156,7 +157,8 @@ def test_deleting_invalidates_the_chapters_segments(make_book, segments, correct
     segments(book)                                             # rebuilt with the correction applied
     delete(client, book)
     with get_conn() as conn:
-        assert conn.execute("SELECT COUNT(*) FROM tts_segments WHERE chapter_id=?", (book.chapters[0],)).fetchone()[0] == 0
+        stored = conn.execute("SELECT COUNT(*) FROM tts_segments WHERE chapter_id=?", (book.chapters[0],)).fetchone()[0]
+        assert stored == 0
 
 
 def test_delete_rejects_bad_requests(make_book, client):

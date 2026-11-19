@@ -68,7 +68,7 @@ url = "https://download.pytorch.org/whl/cu128"
 explicit = true
 
 [tool.ruff]
-line-length = 160                   # a relaxed width: about twice the usual 80
+line-length = 120
 extend-exclude = [".dev", "data", "uploads", "exports", "audio_cache"]
 
 [tool.ruff.lint]

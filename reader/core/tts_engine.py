@@ -513,7 +513,8 @@ class TTSEngine(BaseEngine):
                     orig_idx, text_u, inst_u, ref_u, rtext_u, spd_u, key, path = u
                     gen_sec = gen_per_item
                     if len(audio) == 0:
-                        log.warning("Zero-length audio in batch for item %d (%r), retrying individually", orig_idx, text_u[:40])
+                        log.warning("Zero-length audio in batch for item %d (%r), retrying individually",
+                                    orig_idx, text_u[:40])
                         t1 = time.time()
                         try:
                             audio = self._synthesize_one(text_u, inst_u, ref_u, rtext_u, spd_u, num_step)

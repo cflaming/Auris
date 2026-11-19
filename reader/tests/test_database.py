@@ -80,7 +80,8 @@ def test_legacy_unique_cache_key_is_migrated_without_losing_rows(legacy_db, capl
     with sqlite3.connect(legacy_db) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM tts_segments").fetchone()
-        assert (row["id"], row["text"], row["character_name"], row["speed"], row["cache_key"]) == (7, "Hi.", "Amy", 1.2, "k1")
+        assert (row["id"], row["text"], row["character_name"], row["speed"], row["cache_key"]) == \
+               (7, "Hi.", "Amy", 1.2, "k1")
         assert (row["span"], row["overridden"], row["anchor"], row["engine_tag"]) == (0, 0, None, None)
         add_segment(conn, 1, "Hi.", "k1")                      # the constraint is really gone
 
@@ -104,5 +105,8 @@ def test_old_correction_tables_gain_the_context_columns(fresh_db):
     with sqlite3.connect(fresh_db) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM segment_speakers").fetchone()
-    assert {"detected_speaker", "text", "prev_text", "next_text", "paragraph_text", "created_at", "updated_at"} <= set(row.keys())
-    assert (row["anchor"], row["character_name"], row["text"]) == ("abc:0", "Amy", None)   # data kept, context empty
+    context_columns = {"detected_speaker", "text", "prev_text", "next_text", "paragraph_text",
+                       "created_at", "updated_at"}
+    assert context_columns <= set(row.keys())
+    # the data is kept, its context is empty
+    assert (row["anchor"], row["character_name"], row["text"]) == ("abc:0", "Amy", None)

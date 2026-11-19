@@ -79,14 +79,16 @@ BEHIND_THE_DIALOG = """(() => {
 
 
 def test_tab_goes_round_the_dialog_and_never_into_the_page_behind_it(reader):
-    # Past the last control focus may rest on the body (the browser's own address bar, in a real window), never on the page.
+    # Past the last control focus may rest on the body (the browser's own address bar, in a real window),
+    # never on the page.
     page = reader()
     open_dialog(page)
     for direction in ("Tab", "Shift+Tab"):
         visited = set()
         for press in range(30):
             page.keyboard.press(direction)
-            assert not page.evaluate(BEHIND_THE_DIALOG), f"focus reached the page behind after {press + 1} x {direction}"
+            assert not page.evaluate(BEHIND_THE_DIALOG), \
+                f"focus reached the page behind after {press + 1} x {direction}"
             visited.add(page.evaluate("document.activeElement.textContent.trim().slice(0, 12)"))
         assert {"Apply", "Cancel", "Reset", "Debug info"} <= visited     # it does reach every button
 

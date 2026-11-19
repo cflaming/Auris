@@ -154,8 +154,11 @@ def test_chapters_that_cannot_change_are_not_enriched(make_book, preview, app_mo
     book = make_book(NO_DEAN)                                  # only chapter one mentions Dean
     calls = []
     real = app_module._compute_segments_for_chapter
-    monkeypatch.setattr(app_module, "_compute_segments_for_chapter",
-                        lambda book_id, chapter_id, extra=(): calls.append(chapter_id) or real(book_id, chapter_id, extra))
+    def recording(book_id, chapter_id, extra=()):
+        calls.append(chapter_id)
+        return real(book_id, chapter_id, extra)
+
+    monkeypatch.setattr(app_module, "_compute_segments_for_chapter", recording)
 
     assert preview(book).json["total"] == 2
     assert calls == [book.chapters[0]] * 2                     # chapter one, before and after; chapter two skipped

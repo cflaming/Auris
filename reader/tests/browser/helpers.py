@@ -2,7 +2,7 @@
 
 
 def start_playing(page, idx=None):
-    """Play from a sentence (the cursor's if none given) the way a click on play does, and wait until audio is running."""
+    """Play from a sentence (the cursor's if none given) as a click on play does; wait until audio is running."""
     if idx is not None:
         page.evaluate("i => setCurrentSegment(i, {highlight: true, save: false})", idx)
     page.click("#btn-play")

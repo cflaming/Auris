@@ -8,7 +8,8 @@ def test_resuming_mid_chapter_loads_from_that_sentence_not_the_chapter_start(sit
     start_playing(page)
     s = site.stats()
     texts = page.evaluate("chapter.segments.map(s => s.text)")
-    only_earlier = set(texts[:60]) - set(texts[60:])          # (some lines repeat, so only lines that exist nowhere later tell)
+    # (some lines repeat, so only lines that exist nowhere later tell)
+    only_earlier = set(texts[:60]) - set(texts[60:])
     # Regression: a fresh stream used to begin at sentence 0, so resuming at 335 generated 0..335 first.
     assert not set(s["encoded_texts"]) & only_earlier
     assert s["encodes"] < 20, f"resume generated {s['encodes']} sentences"
@@ -22,7 +23,8 @@ def test_while_paused_the_buffer_generates_ten_ahead_then_goes_quiet(site, reade
     before = site.stats()["requests POST /api/tts/generate"]
     page.wait_for_timeout(2000)
     after = site.stats()["requests POST /api/tts/generate"]
-    assert after == before == 11                                 # the cursor sentence plus ten after it, then nothing more
+    # the cursor sentence plus ten after it, then nothing more
+    assert after == before == 11
 
 
 def test_moving_the_cursor_while_paused_extends_the_buffer_by_only_what_is_new(site, reader):
