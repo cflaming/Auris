@@ -308,18 +308,9 @@ async function openChapter(chapterId, options = {}) {
     _mobileChapterHeader.classList.remove('hidden');
   }
 
-  const [segs, chars] = await Promise.all([
-    fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
-    fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
-  ]);
+  const [segs, chars] = await _fetchChapterData(chapterId);
   if (chapter !== ch) return;
-  ch.segments = segs;
-  _seedAudioCache(segs);
-  // Pre-populate durations from API data so resume-offset calculation is accurate
-  segs.forEach((s, i) => { if (s.duration_sec) ch.durations[i] = s.duration_sec; });
-  charList = chars;
-  charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
-  renderContent(segs);
+  _showChapterData(ch, segs, chars);
 
   document.getElementById('chapter-content').scrollTop = 0;
   window.scrollTo(0, 0);
@@ -331,6 +322,24 @@ async function openChapter(chapterId, options = {}) {
     save: persistOpened,
   });
   if (!_fullChapterMode) _startBackgroundBuffer();
+}
+
+// The chapter's sentences (with their current attribution and audio) and the book's characters.
+function _fetchChapterData(chapterId) {
+  return Promise.all([
+    fetch(`/api/tts/segments/${BOOK_ID}/${chapterId}`).then(r => r.json()),
+    fetch(`/api/books/${BOOK_ID}/characters`).then(r => r.json()).catch(() => []),
+  ]);
+}
+
+function _showChapterData(ch, segs, chars) {
+  ch.segments = segs;
+  _seedAudioCache(segs);
+  // Pre-populate durations from API data so resume-offset calculation is accurate
+  segs.forEach((s, i) => { if (s.duration_sec) ch.durations[i] = s.duration_sec; });
+  charList = chars;
+  charColors = Object.fromEntries(chars.map(c => [c.name, c.color_hex]));
+  renderContent(segs);
 }
 
 // ── Content rendering ─────────────────────────────────────────────────────────
@@ -564,6 +573,8 @@ function _segDur(idx) {
   return _segEnd[idx] !== undefined ? _segEnd[idx] - _segStart[idx] : 0;
 }
 
+let _staleSegs = new Set();       // sentences already in the stream whose speaker was corrected since: replaying one needs a fresh stream
+
 function _teardownMSE({ keepSrc = false } = {}) {
   _sbReady = false;
   _mseNext = 0;
@@ -577,6 +588,7 @@ function _teardownMSE({ keepSrc = false } = {}) {
   if (!keepSrc && !_autoAdvancing) audio.src = '';
   _segStart = {}; _segMax = -1;
   _segEnd   = {};
+  _staleSegs = new Set();
   _chapterAudioChId    = null;
   _chapterPrerenderChId = null;
 }
@@ -871,8 +883,8 @@ async function playSegment(idx) {
         for (let i = 0; i < idx; i++) {
           initOffset += chapter.segments[i]?.duration_sec ?? chapter.durations[i] ?? 0;
         }
-      } else if (_segStart[idx] !== undefined && !_isInBuffer(_segStart[idx])) {
-        // Segment position known but evicted from buffer — restart from there
+      } else if (_segStart[idx] !== undefined && (!_isInBuffer(_segStart[idx]) || _staleSegs.has(idx))) {
+        // Segment position known but evicted from buffer (or its audio is out of date) — restart from there
         needInit   = true;
         initOffset = _segStart[idx];
       }
@@ -2404,13 +2416,33 @@ function moveSpeakerActive(step) {
 // Reload the open chapter so changed attribution, colours and voices take effect, leaving
 // everything else as it was: the same sentence current (and highlighted only if it was), the
 // same scroll position, and playback resumed from that sentence if it was playing.
-async function reloadChapterInPlace() {
+// `changed` are the sentences whose speaker just changed. Playback is only disturbed when the audio it
+// has (the sentence playing, or those already loaded after it) is now out of date; sentences already
+// played, or not loaded yet, don't matter to it, and only the page's labels are refreshed.
+async function reloadChapterInPlace(changed = []) {
   const keep = currentSegIdx;
   const wasPlaying = isPlaying;
+  const loaded = _mseOk && !_fullChapterMode ? _segMax : Infinity;      // beyond this, nothing is loaded ahead (one file or preloads: assume all of it is)
+  const stale = changed.some(i => i >= keep && i <= Math.max(loaded, keep));
   const wasHighlighted = !!document.querySelector('#chapter-content .playing');
   const wasLocked = _cursorLocked;
   const scroller = document.getElementById('chapter-content');
   const scrolls = [scroller.scrollTop, window.scrollY];
+  if (wasPlaying && !stale) {
+    const ch = chapter;
+    const [segs, chars] = await _fetchChapterData(ch.id);
+    if (chapter !== ch) return;
+    changed.forEach(i => {
+      ch.cache.delete(i);                                              // its audio is requested afresh when needed
+      if (_segStart[i] !== undefined) _staleSegs.add(i);               // already played: the stream still holds the old audio
+    });
+    _showChapterData(ch, segs, chars);
+    setCurrentSegment(keep, { highlight: true, behavior: 'auto', save: false });
+    startWordHighlight(keep, _segDur(keep));                           // the words it was following were just redrawn
+    scroller.scrollTop = scrolls[0];
+    window.scrollTo(0, scrolls[1]);
+    return;
+  }
   await openChapter(chapter.id, {
     resumePosition: keep, persistCurrent: false, persistOpened: false, highlightOnLoad: wasHighlighted,
   });
@@ -2426,9 +2458,10 @@ async function applySpeaker(reset) {
   if (idx < 0) return;
   const scope = document.querySelector('input[name="speaker-scope"]:checked').value;
   let character = _speakerChoice || null;
+  const addsCharacter = !reset && character === '__new__';        // a new name can change detection anywhere in the chapter
 
   try {
-    if (!reset && character === '__new__') {
+    if (addsCharacter) {
       const name = document.getElementById('speaker-new-name').value.trim();
       if (!name) { showToast('Enter a name for the new character', 'err'); return; }
       const r = await fetch(`/api/books/${BOOK_ID}/characters`, {
@@ -2452,7 +2485,7 @@ async function applySpeaker(reset) {
 
     closeSpeakerEditor();
     showToast(reset ? 'Speaker reset' : `Speaker updated (${data.updated})`);
-    await reloadChapterInPlace();
+    await reloadChapterInPlace(addsCharacter ? chapter.segments.map((_, i) => i) : _speakerScopeIndices(idx, scope));
   } catch (e) {
     showToast(e.message || 'Request failed', 'err');
   }
