@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ character.name }} - {{ book.title }}{% endblock %}
+{% block content %}
+<div class="studio-page">
+  <div class="studio-header">
+    <a href="/voice-studio/{{ book.id }}" class="btn btn-sm btn-ghost">&#8592; Voice Studio</a>
+    <h1>{{ character.name }} &mdash; <em>{{ book.title }}</em></h1>
+  </div>
+
+  <div id="summary" class="corrections-summary">Loading&hellip;</div>
+  <div id="toolbar" class="corrections-toolbar" hidden>
+    <input id="filter" class="text-input" type="search" placeholder="Filter by text or chapter">
+  </div>
+  <div id="empty" class="corrections-empty" hidden>No sentences are attributed to this character.</div>
+  <div id="excerpt-list"></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>window.BOOK_ID = {{ book.id }}; window.CHARACTER_ID = {{ character.id }};</script>
+<script src="{{ asset('js/excerpts.js') }}"></script>
+<script src="{{ asset('js/character.js') }}"></script>
+{% endblock %}

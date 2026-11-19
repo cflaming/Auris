@@ -584,7 +584,16 @@ body.theme-paper .sentence.overridden {
 .excerpt .diff-line { display: inline-block; margin-right: 6px; }
 .excerpt-meta { margin-top: 6px; font-size: .72rem; display: flex; gap: 10px; align-items: center; }
 .excerpt-note { color: var(--text3); font-size: .72rem; }
-.excerpt-actions { margin-top: 8px; display: flex; gap: 8px; }
+.excerpt-actions { margin-top: 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+/* A passage with the sentences an excerpt is about marked: reading text in the reader's own face and colours. */
+.excerpt .passage-para { margin: 0 0 8px; color: var(--text2); font-family: var(--font-family); line-height: 1.6; }
+.excerpt .hit {
+  color: var(--text); background: var(--accent-bg); border-bottom: 1px solid var(--accent2);
+  border-radius: 2px; padding: 1px 2px; -webkit-box-decoration-break: clone; box-decoration-break: clone;
+}
+.excerpt.multi .hit { cursor: pointer; }
+.excerpt .hit.off { background: none; border-bottom-style: dashed; color: var(--text2); }
+.excerpt .hit.moved { opacity: .55; text-decoration: line-through; text-decoration-color: var(--text3); }
 .badge-status { border-radius: 3px; padding: 1px 6px; font-size: .7rem; }
 .badge-status.ignored, .badge-status.missing { background: rgba(200, 150, 60, .2); color: var(--text); }
 .voice-legend {

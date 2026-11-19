@@ -218,7 +218,7 @@ async function loadCharacters() {
       <div class="character-card" id="card-${ch.id}">
         <div class="char-avatar" style="${avatarStyle}">${initial}</div>
         <div class="char-details">
-          <span class="char-name">${esc(ch.name)} ${genderBadge} <span class="char-freq">x ${ch.frequency}</span>${groupTotal}</span>
+          <span class="char-name"><a href="/characters/${BOOK_ID}/${ch.id}" title="See the sentences ${esc(ch.name)} speaks">${esc(ch.name)}</a> ${genderBadge} <span class="char-freq">x ${ch.frequency}</span>${groupTotal}</span>
           ${aliasNote}
           <div class="voice-controls">
             ${buildSelect(GENDERS, v.gender, `g-${ch.id}`)}

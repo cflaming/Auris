@@ -1572,6 +1572,94 @@ def corrections_page(book_id):
     return render_template('corrections.html', book=dict(book))
 
 
+def _canonical_character(book_id: int, char_id: int):
+    """The character row for char_id, or the one it is merged into (segments carry that name); None if unknown."""
+    with get_conn() as conn:
+        char = conn.execute('SELECT * FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
+        target = char and conn.execute(
+            'SELECT * FROM characters WHERE id=? AND book_id=?', (char['alias_of'], book_id)).fetchone()
+    return target or char
+
+
+@app.route('/api/books/<int:book_id>/characters/<int:char_id>/excerpts')
+def character_excerpt_chapters(book_id, char_id):
+    """The chapters a character speaks in, with how many sentences: cheap, from what is already built.
+    A chapter that is not built yet has count null (unknown until it is opened); built chapters without
+    the character are left out."""
+    char = _canonical_character(book_id, char_id)
+    if not char:
+        return jsonify({'error': 'Character not found'}), 404
+    with get_conn() as conn:
+        chapters = conn.execute(
+            'SELECT id, title, enrichment_version FROM chapters WHERE book_id=? ORDER BY order_num',
+            (book_id,)).fetchall()
+        built = {r[0] for r in conn.execute(
+            'SELECT DISTINCT chapter_id FROM tts_segments WHERE book_id=?', (book_id,))}
+        counts = dict(conn.execute(
+            'SELECT chapter_id, COUNT(*) FROM tts_segments WHERE book_id=? AND character_name=? GROUP BY chapter_id',
+            (book_id, char['name'])).fetchall())
+    out = []
+    for ch in chapters:
+        is_built = ch['id'] in built and ch['enrichment_version'] == ENRICHMENT_VERSION
+        if not is_built:
+            out.append({'id': ch['id'], 'title': ch['title'], 'count': None})
+        elif ch['id'] in counts:
+            out.append({'id': ch['id'], 'title': ch['title'], 'count': counts[ch['id']]})
+    return jsonify({'character': {'id': char['id'], 'name': char['name']}, 'chapters': out})
+
+
+@app.route('/api/books/<int:book_id>/characters/<int:char_id>/excerpts/<int:chapter_id>')
+def character_chapter_excerpts(book_id, char_id, chapter_id):
+    """The sentences a character speaks in one chapter (built now if it is not yet), with the sentence
+    before and after each."""
+    char = _canonical_character(book_id, char_id)
+    if not char:
+        return jsonify({'error': 'Character not found'}), 404
+    with _get_chapter_build_lock(book_id, chapter_id):
+        rows = _ensure_chapter_segments(book_id, chapter_id)
+    return jsonify(_excerpt_groups(rows, char['name']))
+
+
+CONTEXT_SENTENCES = 3       # sentences shown on each side of an excerpt
+MAX_EXCERPT_HITS = 5        # the most of a character's sentences shown together in one excerpt
+
+
+def _excerpt_groups(rows, name: str) -> list[dict]:
+    """A character's sentences in a chapter as excerpts. Sentences close enough that their context
+    would overlap (and so be repeated) are shown together as one excerpt, up to MAX_EXCERPT_HITS of them. An excerpt
+    keeps the chapter's paragraphs: {segment_index, overridden, paragraphs: [[{text, anchor, hit, overridden}]]}."""
+    hits = [i for i, r in enumerate(rows) if r['character_name'] == name]
+    groups = []
+    for i in hits:
+        if groups and len(groups[-1]) < MAX_EXCERPT_HITS and i - groups[-1][-1] <= 2 * CONTEXT_SENTENCES + 1:
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    out = []
+    for group in groups:
+        window = range(max(0, group[0] - CONTEXT_SENTENCES), min(len(rows), group[-1] + CONTEXT_SENTENCES + 1))
+        paragraphs = []
+        for _, idxs in groupby(window, key=lambda i: rows[i]['paragraph']):
+            sentences = [{'text': rows[i]['text'], 'anchor': rows[i]['anchor'], 'hit': i in group,
+                          'overridden': bool(rows[i]['overridden'])} for i in idxs if rows[i]['text']]
+            if sentences:
+                paragraphs.append(sentences)
+        out.append({'segment_index': rows[group[0]]['segment_index'], 'paragraphs': paragraphs})
+    return out
+
+
+@app.route('/characters/<int:book_id>/<int:char_id>')
+def character_page(book_id, char_id):
+    book = _load_book(book_id)
+    if not book:
+        return 'Book not found', 404
+    with get_conn() as conn:
+        char = conn.execute('SELECT id, name FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
+    if not char:
+        return 'Character not found', 404
+    return render_template('character.html', book=dict(book), character=dict(char))
+
+
 def _store_segments(book_id, chapter_id, segs):
     with get_conn() as conn:
         conn.execute(
