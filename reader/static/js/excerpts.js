@@ -16,7 +16,7 @@ function readerUrl(bookId, chapterId, segmentIndex) {
 // lines: [{kind: 'del' | 'add' | 'plain', label}], meta/actions: HTML strings (already escaped).
 // Context is one line of preceding text (`prev`), or the passage as the chapter has it: `paragraphs`, a list
 // of paragraphs of sentences [{text, anchor, hit}], where the hits are the sentences the card is about.
-function excerptCard({ prev, text, paragraphs, lines = [], meta = '', actions = '', cls = '', attrs = '' }) {
+function excerptCard({ prev, text, paragraphs, lines = [], meta = '', actions = '', cls = '' }) {
   const lineHtml = lines.map(l => {
     const sign = l.kind === 'del' ? '− ' : l.kind === 'add' ? '+ ' : '';
     return `<div class="diff-line ${l.kind === 'plain' ? '' : l.kind}">${sign}${escapeHtml(l.label)}</div>`;
@@ -28,7 +28,7 @@ function excerptCard({ prev, text, paragraphs, lines = [], meta = '', actions = 
     ? paragraphs.map(p => `<p class="passage-para">${p.map(sentence).join(' ')}</p>`).join('')
     : `${prev ? `<div class="diff-ctx">${escapeHtml(prev)}</div>` : ''}
     <div class="diff-text">${escapeHtml(text ?? '(sentence no longer in the text)')}</div>`;
-  return `<div class="excerpt ${cls}" ${attrs}>
+  return `<div class="excerpt ${cls}">
     ${context}
     ${lineHtml}
     ${meta ? `<div class="excerpt-meta">${meta}</div>` : ''}

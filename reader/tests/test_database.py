@@ -80,8 +80,8 @@ def test_legacy_unique_cache_key_is_migrated_without_losing_rows(legacy_db, capl
     with sqlite3.connect(legacy_db) as conn:
         conn.row_factory = sqlite3.Row
         row = conn.execute("SELECT * FROM tts_segments").fetchone()
-        assert (row["id"], row["text"], row["character_name"], row["speed"], row["cache_key"]) == \
-               (7, "Hi.", "Amy", 1.2, "k1")
+        fields = (row["id"], row["text"], row["character_name"], row["speed"], row["cache_key"])
+        assert fields == (7, "Hi.", "Amy", 1.2, "k1")
         assert (row["span"], row["overridden"], row["anchor"], row["engine_tag"]) == (0, 0, None, None)
         add_segment(conn, 1, "Hi.", "k1")                      # the constraint is really gone
 

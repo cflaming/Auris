@@ -1580,9 +1580,10 @@ def _canonical_character(book_id: int, char_id: int):
     """The character row for char_id, or the one it is merged into (segments carry that name); None if unknown."""
     with get_conn() as conn:
         char = conn.execute('SELECT * FROM characters WHERE id=? AND book_id=?', (char_id, book_id)).fetchone()
-        target = char and conn.execute(
-            'SELECT * FROM characters WHERE id=? AND book_id=?', (char['alias_of'], book_id)).fetchone()
-    return target or char
+        if char and char['alias_of'] is not None:
+            char = conn.execute(
+                'SELECT * FROM characters WHERE id=? AND book_id=?', (char['alias_of'], book_id)).fetchone() or char
+    return char
 
 
 @app.route('/api/books/<int:book_id>/characters/<int:char_id>/excerpts')

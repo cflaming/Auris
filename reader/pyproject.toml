@@ -77,10 +77,10 @@ ignore = [
     "E701", "E702",     # `if x: return` and `a; b` one-liners are this codebase's style
     "E731",             # a lambda bound to a name is fine for small helpers
     "B905",             # zip() without strict=
-    "UP031",            # %-formatting in tests
 ]
 
 [tool.ruff.lint.per-file-ignores]
+"tests/**" = ["UP031"]              # %-formatting in test strings
 "app.py" = ["E402"]                 # some imports follow setup code on purpose
 "core/enrichment.py" = ["E501"]     # long word lists
 "core/exporter.py" = ["E501"]

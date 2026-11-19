@@ -87,8 +87,8 @@ def test_tab_goes_round_the_dialog_and_never_into_the_page_behind_it(reader):
         visited = set()
         for press in range(30):
             page.keyboard.press(direction)
-            assert not page.evaluate(BEHIND_THE_DIALOG), \
-                f"focus reached the page behind after {press + 1} x {direction}"
+            behind = page.evaluate(BEHIND_THE_DIALOG)
+            assert not behind, f"focus reached the page behind after {press + 1} x {direction}"
             visited.add(page.evaluate("document.activeElement.textContent.trim().slice(0, 12)"))
         assert {"Apply", "Cancel", "Reset", "Debug info"} <= visited     # it does reach every button
 

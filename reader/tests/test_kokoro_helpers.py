@@ -40,7 +40,6 @@ def test_cache_key_depends_on_voice_text_and_speed_not_reference_audio():
     assert base != key("Hello.", "male", None, 1.1)
 
 
-
 def test_curly_apostrophes_inside_words_become_straight_but_quotes_stay():
     text = "like a shark’s. And don’t ‘black’ eyes, ʼtis"
     assert _CURLY_APOSTROPHE_RE.sub("'", text) == "like a shark's. And don't ‘black’ eyes, ʼtis"
